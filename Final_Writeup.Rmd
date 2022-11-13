@@ -1,0 +1,1723 @@
+---
+title: "Racial Disparities in Public Health Outcomes in Chicago"
+authors: Gauri Dandi, Sukriti Ghosh, Ashlee Korsberg, Mary St. Jean, Lily Taub
+output:
+  html_document:
+    df_print: paged
+    toc: TRUE
+---
+
+```{r, echo = FALSE, warning = FALSE, message = FALSE}
+source("source_code/backend_functions.R", local = knitr::knit_global())
+source("source_code/chicago_visualizations.R", local = knitr::knit_global())
+```
+
+# Introduction
+The quality of women’s health in the U.S. is significantly lower than that of other developed nations [[1]](#ref1). Quality of and access to women’s healthcare significantly varies based on socioeconomic factors such as employment, income, level of education, and race/ethnicity. Disparities in access to preventive services, such as STI screenings, are well-documented [[2]](#ref2). These screenings are essential as STIs can negatively impact women’s overall health and cause fertility issues. Inequities in maternal care and outcomes are also well-documented. Specifically, rates of maternal morbidity and mortality are particularly high in the U.S., and differ greatly by race/ethnicity [[3]](#ref3). Maternal health also impacts newborn and infant health outcomes. For the purposes of this study, we decided to use Chicago as a case study to evaluate the inequities that exist in women’s health. The racial/ethnic makeup of the city is representative of the U.S. and women’s health inequities in the city are also representative of national trends.
+
+## Project Aims
+### Aim 1: Visualization of Women’s Sexual and Maternal Health
+1.1. Represent sexual health indicators and maternal health indicators by community group, with an emphasis on creating a graphic through which the viewer is able to ascertain differences in rates and prevalences between community group.
+
+1.2. Represent racial and socioeconomic characteristics of the community groups.
+
+### Aim 2: Statistical Analysis of Women’s Sexual and Maternal Health by Community Groups
+2.1. Determine if the difference in sexual health measures in Chicago’s community groups, by year from 2000-2009 are statistically significant.
+
+2.2. Determine if the difference in maternal health measures in Chicago’s community groups, by year from 2000-2009 are statistically significant.
+
+# Data Collection and Cleaning
+## Public Health Indicators
+We found a dataset via Kaggle [[4]](#ref4) that contained 16 files pertaining to varied public health outcomes from the City of Chicago's Data Portal. We then down-selected to 10 that contained data relating to socioeconomic status and women’s sexual and maternal health. The Chicago Public Health data aggregates selected public health metrics for each of the 77 community areas in Chicago. Data relating to women’s sexual health include gonorrhea and chlamydia incidence rates from 2000-2014, birth rates, teen birth rates, and general fertility rates from 1999-2009. Data on maternal health covers infant mortality rates, low birthweight, prenatal care, and preterm births (all 2000-2009). For each topic, raw counts of incidence and the prevalence of the outcome of interest are reported. To look at the distributions of socioeconomic status(SES) across neighborhoods, we analyzed the “Hardship Index” , which uses 6 variables to ascertain SES status: % below poverty level, % of residents living in crowded housing, % of residents <18 and >65 (dependents), % of adults 25+ with no high school diploma, per-capita income, and % of residents 16+ that are unemployed.
+
+## Demographic Data
+We scraped racial data for each community area in Chicago from “Community Data Snapshots” reports [[5]](#ref5), as compiled by the Chicago Metropolitan Agency for Planning (CMAP). We used Python libraries to both scrape and combine all of the demographic data. To scrape each individual PDF from CMAP, we used the BeautifulSoup library to save each PDF file to one local directory. We then used the tabula library to parse each PDF to retrieve the table that represented the racial breakdown of the neighborhood from the 2000 Census and the 2006-2010 American Community Survey five-year estimates. The final combined dataframe had 77 rows representing each community area and had 2 columns representing the proportion of each of 5 race categories (White, Black, Hispanic/Latino, Asian, Other/Multiple Races) from the two surveys.
+
+Because each data set groups by community area, we were be able to compare sexual health and women’s health metrics between community areas and can overlay these metrics with racial variations among the community areas. However, when beginning to analyze our data, we realized that using 77 neighborhoods made it hard to draw meaningful conclusions in the racial inequities that exist in Chicago. So, we decided to split up the neighborhoods into 5 community groups. In order to do this, we assigned the neighborhoods on a scale of "Least Diverse", for the neighborhoods with the highest proportion of white residents, to "Most Diverse".
+
+# High-Level Visualizations
+## Racial Distributions
+
+To start off with, we read in the raw parsed race data from the PDFs on CMAP and renamed the columns to make the data more readable. Then, using the `mutate()` function in dplyr, we used the proportion of white residents to create an ordinal variable representing the community group that each neighborhood belonged to. 
+
+```{r readRaceData, warning = FALSE, message = FALSE}
+race = read.csv("data/race_data/all_race_data.csv")
+
+names(race) = c("Neighborhood", "White.Non.Hispanic_2000", 
+                "White.Non.Hispanic_2006-2010",
+                "Black.Non.Hispanic_2000", "Black.Non.Hispanic_2006-2010",
+                "Hispanic.or.Latino_2000", "Hispanic.or.Latino_2006-2010",
+                "Asian.Non.Hispanic_2000", "Asian.Non.Hispanic_2006-2010",
+                "Other.or.Multiple.Races.Non.Hispanic_2000", 
+                "Other.or.Multiple.Races.Non.Hispanic_2006-2010")
+
+# create variable representing community groups
+raceCommunities = race %>%
+  select(Neighborhood, ends_with("2000")) %>%
+  mutate(diversity_score = case_when(
+    White.Non.Hispanic_2000 >= 62.8 ~ "1",
+    White.Non.Hispanic_2000 < 62.8 & White.Non.Hispanic_2000 >= 36.7 ~ "2",
+    White.Non.Hispanic_2000 < 36.7 & White.Non.Hispanic_2000 >= 12.3 ~ "3",
+    White.Non.Hispanic_2000 < 12.3 & White.Non.Hispanic_2000 >= 1.1 ~ "4",
+    White.Non.Hispanic_2000 < 1 ~ "5"
+  )) %>%
+  mutate(community_group = recode(diversity_score,
+                                  "1" = "Least",
+                                  "2" = "Less",
+                                  "3" = "Moderately",
+                                  "4" = "More",
+                                  "5" = "Most"))
+
+race2000 = raceCommunities %>%
+  pivot_longer(cols = c("White.Non.Hispanic_2000", "Black.Non.Hispanic_2000", 
+                        "Hispanic.or.Latino_2000", "Asian.Non.Hispanic_2000", 
+                        "Other.or.Multiple.Races.Non.Hispanic_2000"), 
+               names_to = "race")
+```
+
+```{r racePieCharts, warning = FALSE, message = FALSE}
+pie_chart = race2000 %>%
+  group_by(community_group, race) %>%
+  mutate(value = value / 100)%>%
+  summarise(mean = mean(value)) %>%
+  ggplot(aes(x = "", group = as.numeric(mean), fill = race)) + 
+  geom_bar(aes(y = as.numeric(mean)), stat = "identity", width = 1) +
+  facet_wrap(~ community_group, ncol = 3) +
+  theme_void() +
+  coord_polar(theta = "y", start = 0) +
+  labs(fill = "Race") +
+  scale_fill_manual(values = wes_palette("Darjeeling1", n = 5), 
+                    labels = c("Asian", "Black", "Hispanic or Latino",
+                               "Other or Multiple Races", "White")) +
+  ggtitle("Racial Makeup of 5 Community Groups", subtitle = "")
+pie_chart
+```
+
+**Discussion**: This pie chart shows a breakdown of race in each community grouping from least to most diverse based on the proportion of non-white residents in each neighborhood in 2000. The least diverse community group had an aggregate of 77.8% white residents, 5.5% black residents, 11.4% Hispanic or Latino residents, 3.4% Asian residents, and 1.9% residents from other/mixed races. By contrast, the most diverse community group had 5.8% white residents, 96.9% black residents, 1.5% Hispanic or Latino residents, 0.1% Asian residents, and 0.1% residents from other/mixed races.
+
+## Socioeconomic Status
+
+Before evaluating the public health indicators in each community group, we wanted to take a look at another factor that may influence these outcomes: socioeconomic status. In order to do this, we calculated a measure called a hardship index.
+
+First, we read in the raw public health indicators representing aggregate values from 2007-2011, standardized the neighborhood names, removed all columns not related to SES, and joined the raw dataset with our race dataset.
+```{r rawPHI, warning = FALSE, message = FALSE}
+phi = read.csv(paste0("data/health_stats/public-health-statistics-selected-",
+                      "public-health-indicators-by-chicago-community-area.csv"))
+phi$Community.Area.Name = renameNeighborhoods(phi)
+
+# extract the 6 columns pertaining to socioeconomic status
+phi_se = phi[,c(1, 2, 24:29)]
+
+ses_and_race = join_with_race(phi_se, race)
+```
+
+**Hardship Index**: The Hardship Index [[7]](#ref7) is a standardized measure that calculates the relative composition of 6 variables related to socioeconomic status: % below poverty level, % crowded housing (living in housing units with more than 1 person in each room), % of population <18 and >64, % of adults 25+ without a high school diploma, per capita income, and % of 16+ that are unemployed. A higher hardship index indicates a community with worse SES conditions. We calculated the hardship index for each neighborhood and then averaged the individual indices for each community group using the following formula: $\frac{value - minimum}{maximum - minimum} * 100$.
+
+```{r hardshipIndex}
+ses_and_race = ses_and_race %>%
+  mutate(poverty_hi = ((Below.Poverty.Level - min(Below.Poverty.Level)) / 
+                         (max(Below.Poverty.Level) - min(Below.Poverty.Level)))*100,
+         crowded_hi = ((Crowded.Housing - min(Crowded.Housing)) / 
+                         (max(Crowded.Housing) - min(Crowded.Housing)))*100,
+         dependency_hi = ((Dependency - min(Dependency)) / 
+                            (max(Dependency) - min(Dependency)))*100,
+         hsdip_hi = ((No.High.School.Diploma - min(No.High.School.Diploma)) / 
+                       (max(No.High.School.Diploma) - min(No.High.School.Diploma)))*100,
+         percap_hi = ((Per.Capita.Income - max(Per.Capita.Income)) / 
+                        (min(Per.Capita.Income) - max(Per.Capita.Income)))*100,
+         umployment_hi = ((Unemployment - min(Unemployment)) / 
+                            (max(Unemployment) - min(Unemployment)))*100)
+
+ses_and_race = ses_and_race %>%
+  mutate(hardship_index = round((poverty_hi + crowded_hi + dependency_hi +
+                                   hsdip_hi + percap_hi + umployment_hi) / 6, 2))
+
+avg_hardship = mean(ses_and_race$hardship_index)
+median_hardship = median(ses_and_race$hardship_index)
+```
+
+```{r hardshipBar, warning = FALSE, message = FALSE}
+hardship_bar = ses_and_race %>%
+  group_by(community_group) %>%
+  summarise(avg_hi = mean(hardship_index)) %>%
+  ggplot(aes(x = community_group, y = avg_hi)) +
+  geom_bar(stat = "identity") +
+  geom_hline(aes(yintercept = avg_hardship,
+             color = "Average Chicago-Wide Hardship Index"), linetype = 2) +
+  # scale_color_manual(name = "statistics", values = c(`Average` = "red")) +
+  theme_classic() +
+  ggtitle("Socioeconomic Hardship Index by Community Group") +
+  labs(x = "Community Diversity Grouping", 
+       y = "Hardship Index") +
+  annotate(geom="text", label = round(avg_hardship, 2), x = 0.67, 
+           y = avg_hardship, vjust = -1) +
+  theme(plot.title = element_text(hjust=0.5)) +
+  scale_colour_manual(name = "", values = c("blue")) +
+  scale_x_discrete(labels=c("Least Diverse" = "Least", "Less Diverse" = "Less",
+                            "Moderately Diverse" = "Moderately", 
+                            "More Diverse" = "More",
+                            "Most Diverse" = "Most"))
+hardship_bar
+```
+
+**Discussion and Statistical Analysis**: This bar chart displays the average hardship index for each of the 5 community groups. There is a very clear trend showing that the least and less diverse communities had hardships under the Chicago-wide average hardship, while the moderately-most diverse communities were above the average. To investigate this trend further, we ran a one-way ANOVA test with a Tukey-Kramer HSD post-hoc test.
+
+```{r, hardshipANOVATukey, message = FALSE, warning = FALSE}
+model = aov(hardship_index ~ community_group, data = ses_and_race)
+aov_summary = summary(model)
+tukey = TukeyHSD(model)$community_group[,4]
+tukey_results = ifelse(tukey < 0.001, "< 0.001", 
+                       ifelse(round(tukey, 5) == 1, 0.99999, round(tukey, 5)))
+tukey_df = data.frame(tukey_results)
+rows = rownames(tukey_df)
+names(tukey_df) = c("P-Value")
+
+tukey_results_df = data.frame(lapply(tukey_df, function(x) {
+    cell_spec(x, bold = ifelse((as.numeric(x) < 0.05) | (x == "< 0.001"), T, F))
+  }))
+rownames(tukey_results_df) = rows
+
+kable(tukey_results_df, escape = FALSE) %>% kable_styling()
+```
+
+After running the one-way ANOVA, we see that there is a statistically significant difference in hardship index between at least two of the five community groups with a p-value < 0.001. Following up with the Tukey-Kramer HSD post-hoc test shows statistically significant differences between: Moderately/More/Most Diverse-Least Diverse and More/Most Diverse-Less Diverse community groups.
+
+## Community Groups
+
+This map shows the spatial locations of each which neighborhoods make up each of the 5 community groups that we created. This visualization and all others like it in this report are created from modified 2 functions from the MapChi R package [[6]](#ref6). The modifications to these functions can be found in the `chicago_visualizations.R` file.
+
+```{r, warning = FALSE, message = FALSE}
+colors <- brewer.pal(n = 5, name = "Purples")
+chicago_map_communities = heat_map_discrete(regions = "CAs", 
+                                            summary_df = ses_and_race, 
+                                            regions_var = "Community.Area",
+                                            fill_var = "community_group", 
+                                            legend_name = "Community Group", 
+                                            palette = colors,
+                                            title = "Categorization of Neighborhoods by Diversity",
+                                            neighborhood_column = "Community.Area.Name",
+                                            diversity_variable = "community_group")
+ggplotly(chicago_map_communities, tooltip = "text")
+```
+
+To visualize the distribution of socioeconomic hardship across Chicago, we created a heatmap superimposed on a map of the city. Hovering over each neighborhood shows the community group that the neighborhood is a part of in our analysis.
+
+```{r hardshipMap, message = FALSE, warning = FALSE}
+chicago_map_hardship = heat_map_continuous(regions = "CAs", 
+                                           summary_df = ses_and_race,
+                                           regions_var = "Community.Area",
+                                           # fill each variable
+                                           fill_var = "hardship_index",
+                                           legend_name = "SES Hardship Index", 
+                                           palette = "purple",
+                                           title = "Socioeconomic Hardship in Chicago",
+                                           # for the tooltip:
+                                           neighborhood_column = "Community.Area.Name",
+                                           statistic_of_interest = "hardship_index",
+                                           statistic_label = "Hardship Index",
+                                           diversity_variable = "community_group")
+ggplotly(chicago_map_hardship, tooltip = c("text"))
+```
+
+For the most part, the neighborhoods with the lowest hardship are in the west and south sides of Chicago, as are the community groups 
+
+# Public Health Visualizations and Statistical Analyses
+## Sexual Health
+### Chlamydia Incidence Rates
+
+#### Chlamydia: Data Cleaning
+This analysis regards a dataset that recorded chlamydia cases among females aged 15-44 from the years 2000-2014. This first code chunk does the first steps of cleaning the initial dataset. This data included columns labeling the cases, incidence rates, and upper and lower confidence levels of the incidence rates. Since we were not analyzing confidence intervals in this project, those columns were eliminated using RegEx patterns in the column names. Then, the columns of cases and incidences that did not fall under the years 2000-2009, which was the decade examined in this study, were also removed. In initial data analysis, three neighborhood were seen to have no or close to no data in the whole row. Therefore, these rows were set to zero so that the neighborhood would still be included in the dataset, but would not affect the rest of the analysis. Finally, the dataset was sorted by the joined community grouping column, based on white population per neighborhood, for more clarity in further analysis.
+
+```{r, message = FALSE, warning = FALSE}
+#reading in original data
+chlamydia<-read.csv("data/health_stats/chlamydia-cases.csv")
+
+#removing confidence interval columns and columns outside of 2000-2009 year range
+chlamydia_noCI<-chlamydia[,grepl("[^(CI)]$",colnames(chlamydia))] #removing columns with "CI" in the column name 
+chlamydia_2000<-chlamydia_noCI[,1:23] #removing columns not in 2000-2009 range 
+chlamydia_2000[c(9, 12, 76),4:ncol(chlamydia_2000) ]<-0
+
+#adding column to delineate community grouping by white population numbers
+chlamydia_2000 %<>% 
+  mutate(Comm_Group = ifelse(White..Non.Hispanic..2000>62.5,"Least",
+                             ifelse(White..Non.Hispanic..2000<62.5 & 
+                                      White..Non.Hispanic..2000>32,"Less",
+                                    ifelse(White..Non.Hispanic..2000<32 & 
+                                             White..Non.Hispanic..2000>12,"Moderate",
+                                           ifelse(White..Non.Hispanic..2000<12 & 
+                                                    White..Non.Hispanic..2000>1,
+                                                  "More","Most")))))
+
+#ordering dataset by community grouping for clarity  
+chlamydia_grouped<-chlamydia_2000[order(chlamydia_2000$Comm_Group),]
+```
+
+The next step was to perform calculations on the columns to obtain weighted averages for each year by multiplying the cases by the incidence rate/100. The incidence rate was recorded per 100,000 so by dividing by 1000, the value is effectively made a percentage rate to multiple the raw case numbers by. These calculated columns were added to the dataframe. Once added, only the calculated weighted average columns were selected and subset into a new dataframe that was used for visualization and analysis. 
+
+```{r, warning = FALSE, message = FALSE}
+#adding weighted average columns 
+chlamydia_grouped$weight2000<-chlamydia_grouped$Cases.2000.Female.15.44 *
+  (chlamydia_grouped$Incidence.Rate.2000/1000)
+chlamydia_grouped$weight2001<-chlamydia_grouped$Cases.2001.Female.15.44 *
+  (chlamydia_grouped$Incidence.Rate.2001/1000)
+chlamydia_grouped$weight2002<-chlamydia_grouped$Cases.2002.Female.15.44 *
+  (chlamydia_grouped$Incidence.Rate.2002/1000)
+chlamydia_grouped$weight2003<-chlamydia_grouped$Cases.2003.Female.15.44 *
+  (chlamydia_grouped$Incidence.Rate.2003/1000)
+chlamydia_grouped$weight2004<-chlamydia_grouped$Cases.2004.Female.15.44 *
+  (chlamydia_grouped$Incidence.Rate.2004/1000)
+chlamydia_grouped$weight2005<-chlamydia_grouped$Cases.2005.Female.15.44 *
+  (chlamydia_grouped$Incidence.Rate.2005/1000)
+chlamydia_grouped$weight2006<-chlamydia_grouped$Cases.2006.Female.15.44 *
+  (chlamydia_grouped$Incidence.Rate.2006/1000)
+chlamydia_grouped$weight2007<-chlamydia_grouped$Cases.2007.Female.15.44 *
+  (chlamydia_grouped$Incidence.Rate.2007/1000)
+chlamydia_grouped$weight2008<-chlamydia_grouped$Cases.2008.Female.15.44 *
+  (chlamydia_grouped$Incidence.Rate.2008/1000)
+chlamydia_grouped$weight2009<-chlamydia_grouped$Cases.2009.Female.15.44 *
+  (chlamydia_grouped$Incidence.Rate.2009/1000)
+
+#selecting only weighted average columns 
+chlamydia_weighted<-select(chlamydia_grouped,c(1:2,24,contains("weight")))
+```
+
+#### Chlamydia: Visualizations
+
+Once the dataframe had the necessary information, the last step before proceeding to visualizing the data was to transform the dataframe into a pivotted table, where all the years were rows instead of columns. This was to ensure that the ensuing bar plot could be grouped into years and then into community group to make the visual as clear as possible and ensure it conveyed all the information in the dataframe accurately. The data was then graphed with a bar chart by community grouping, with each grouping showing averages for each of the ten years studied.
+
+```{r, warning = FALSE, message = FALSE}
+#pivoted year and weighted average columns to make graphing easier 
+chlamydia_pivot<-chlamydia_weighted %>%
+  pivot_longer(
+    cols = 4:13,
+    names_to = "year",
+    values_to = "avg")
+#extra step to change the year values so that only the year is the value and not "weight[year]"
+chlamydia_pivot$year<-str_replace(chlamydia_pivot$year,"weight","")
+
+#barplot
+chl_bar<-ggplot(chlamydia_pivot,aes(x=Comm_Group,y=avg,fill=year,group=year))+
+  geom_bar(stat="identity",position = "dodge")+
+  theme_classic()+
+  theme(legend.position = "right") +guides(fill=guide_legend(title="Year"))+
+  ylab("Weighted Avg of Chlamydia Cases")+
+  xlab("Community Group") +
+  ggtitle("Average Chlamydia Cases Among \n15-44 Year Old Females in Chicago")+
+  scale_fill_brewer(palette="PiYG")
+
+chl_bar + theme(plot.title = element_text(hjust=0.5))
+```
+
+This bar chart shows the clear differences in neighborhoods in the more and most diverse community grouping and the least and less groupings. Effectively, the graph shows the disproportionate amount of chlamydia cases affecting more diverse neighborhoods in Chicago. Furthermore, the "more diverse" community grouping shows a steady increase in chlamydia cases over the 10 year period studied. 
+
+The second visualization is a heatmap, shown within a map of Chicago to show cases by neighborhood of the city. Below is code from a package installed from Github that allows this functionality to not only show a heatmap by neighborhood, but also provide an interactive element. A tooltip shows each neigborhood name, and average chlamydia cases when hovered over. 
+
+```{r, message = FALSE, warning = FALSE}
+chicago_map_chlamydia = heat_map_continuous(regions = "CAs", 
+                                            #PUT IN ALL COLUMNS AS STRINGS
+                                            summary_df = chlamydia_pivot,
+                                            regions_var = "Community.Area", 
+                                            fill_var = "avg",
+                                            legend_name ="Chlamydia Cases among 15-44 yr old women" , 
+                                            palette = "purple",
+                                            title = "Chlamydia Cases in Chicago",
+                                            neighborhood_column = "Community.Area.Name",
+                                            statistic_of_interest = "avg",
+                                            statistic_label = "Avg chlamydia cases",
+                                            diversity_variable = "Comm_Group")
+ggplotly(chicago_map_chlamydia, tooltip = c("text"))
+```
+
+This heatmap shows the neighborhoods in Chicago and their relative average chlamydia cases. Hovering over the neighborhoods shows that more diverse neighborhoods typically have higher chlamydia cases. 
+
+#### Chlamydia: Statistical Analysis
+
+Finally, for the statistical testing of this dataset, ANOVA testing with the Tukey-Kramer method was used to test statistical differences between community group for each year studied (2000-2009). The results are summarized in the table below.
+
+```{r, warning = FALSE, message = FALSE}
+source("source_code/stat_analysis/StatAnalysisChlamydia.R")
+kable(tukey_results_clm, escape = FALSE) %>%
+  kable_styling()
+```
+
+**Results and Interpretation**
+
+**Chlamydia, Table 1:** P-Value Results of ANOVA statistical testing for Chlamydia cases, by year.
+
+| **Year** | **P-Value** | 
+| :------- | :---------- |
+| 2000     | < 0.001     |
+| 2001     | < 0.001     |
+| 2002     | < 0.001     |
+| 2003     | < 0.001     |
+| 2004     | < 0.001     | 
+| 2005     | < 0.001     | 
+| 2006     | < 0.001     | 
+| 2007     | < 0.001     | 
+| 2008     | < 0.001     |
+| 2009     | < 0.001     |
+
+**Chlamydia, Table 2.** Results of Tukey-Kramer HSD statistical testing for Chlamydia cases, by year.* 
+
+| **Year** | **Statistically Significant Differences** |
+| :------- | :---------------------------------------- |
+| 2000     | Least - More/Most                         |
+|          | Less - More/Most                          |
+|          | Moderately - More/Most                    |
+|          |                                           |
+| 2001     | Least - More/Most                         |
+|          | Less - More/Most                          |
+|          | Moderately - More/Most                    |
+|          |                                           |
+| 2002     | Least - More/Most                         |
+|          | Less - More/Most                          |
+|          | Moderately - More/Most (More-Mod p=0.39)  |
+|          |                                           |
+| 2003     | Least - More/Most                         |
+|          | Less - More/Most                          |
+|          | Moderately - More/Most (More-Mod p=0.04)  |
+|          |                                           |
+| 2004     | Least - More/Most                         |
+|          | Less - More/Most                          |
+|          | Moderately - More/Most (More-Mod p=0.04)  |
+|          |                                           |
+| 2005     | Least - More/Most                         |
+|          | Less - More/Most                          |
+|          | Moderately - More/Most                    |
+|          |                                           |
+| 2006     | Least - More/Most                         |
+|          | Less - More/Most                          |
+|          | Moderately - More/Most                    |
+|          |                                           |
+| 2007     | Least - More/Most                         |
+|          | Less - More/Most                          |
+|          | Moderately - More/Most                    |
+|          |                                           |
+| 2008     | Least - More/Most                         |
+|          | Less - More/Most                          |
+|          | Moderately - More/Most (More-Mod p=0.036) |
+|          |                                           |
+| 2009     | Least - More/Most                         |
+|          | Less - More/Most                          |
+|          | Moderately - More/Most                    |
+|          |                                           |
+
+*p-values reported for values close to 0.05 threshold, may require further testing
+
+As shown above, there were statistical differences between the More/Most diverse groups and the Least/Less diverse groups across all the years studied, confirming the visual analysis of the bar chart. There was also a statistical difference seen between the moderately and More/Most groups, but some of the p-values (reported in the table above) were quite close to the p<0.05 threshold, and therefore may require further analysis or testing to truly determine the validity of the statistcally significant difference. 
+
+### Gonorrhea Incidence Rates
+
+#### Gonorrhea: Data Cleaning
+The format of dataset for gonorrhea cases in Chicago was very similar to that of chlamydia cases. This dataset was also describing gonorrhea cases in Chicago women aged 15-44 years old. Because the datasets were very similar, the cleaning was done in the same manner, using regex to remove confidence interval columns, removing any columns relating to years not within 2000-2009, and adding a column to denote community grouping based on the white population in that specific neighborhood. The main difference with this dataset was that there were multiple neighborghoods with missing values (NAs) in many or all years. This particularly occurred in the neighborhoods with the most white populations, or what we designated as the Least and Less diverse community groups. This essentially rendered the whole row empty, leaving imputation and other missingness-handling techniques unavailable to use. However, the last column of the dataset revealed that "Rate and confidence interval estimates for years in which fewer than 20 cases were reported are unreliable." This lead us to replace NA values with 19 as a placeholder value for >20 cases. This also ensured that all neighborhoods would still be present on the Chicago heatmap visualization, instead of displaying a neighborhood as NA. 
+
+```{r, warning = FALSE, message = FALSE}
+gonorrhea_original<-read.csv("data/health_stats/gonorrhea-cases-all.csv")
+gonorrhea_noCI<-gonorrhea_original[,grepl("[^(CI)]$",colnames(gonorrhea_original))] 
+gonorrhea_2000<-gonorrhea_noCI[,1:23]
+
+gonorrhea_2000  %<>% mutate(Comm_Group=ifelse(White..Non.Hispanic..2000>62.5,"Least",
+                                        ifelse(White..Non.Hispanic..2000<62.5 & 
+                                                 White..Non.Hispanic..2000>32,"Less",
+                                        ifelse(White..Non.Hispanic..2000<32 &
+                                                 White..Non.Hispanic..2000>12,"Moderate",
+                                        ifelse(White..Non.Hispanic..2000<12 &
+                                                 White..Non.Hispanic..2000>1,
+                                               "More","Most")))))
+
+gonorrhea_grouped<-gonorrhea_2000[order(gonorrhea_2000$Comm_Group),]
+gonorrhea_grouped[is.na(gonorrhea_grouped)] = 19 #replacing NAs with 19 to represent >20 cases 
+```
+
+The next portion of data manipulation also mimics that done with the chlamydia dataset. Weighted averages for gonorrhea cases per year are calculated using the incidence rate(initially reported per 100,000)/1000 multiplied by the raw case numbers. 
+
+```{r, warning = FALSE, message = FALSE}
+gonorrhea_grouped$weight2000<-gonorrhea_grouped$Cases.2000.Female.15.44*(gonorrhea_grouped$Incidence.Rate.2000/1000)
+gonorrhea_grouped$weight2001<-gonorrhea_grouped$Cases.2001.Female.15.44*(gonorrhea_grouped$Incidence.Rate.2001/1000)
+gonorrhea_grouped$weight2002<-gonorrhea_grouped$Cases.2002.Female.15.44*(gonorrhea_grouped$Incidence.Rate.2002/1000)
+gonorrhea_grouped$weight2003<-gonorrhea_grouped$Cases.2003.Female.15.44*(gonorrhea_grouped$Incidence.Rate.2003/1000)
+gonorrhea_grouped$weight2004<-gonorrhea_grouped$Cases.2004.Female.15.44*(gonorrhea_grouped$Incidence.Rate.2004/1000)
+gonorrhea_grouped$weight2005<-gonorrhea_grouped$Cases.2005.Female.15.44*(gonorrhea_grouped$Incidence.Rate.2005/1000)
+gonorrhea_grouped$weight2006<-gonorrhea_grouped$Cases.2006.Female.15.44*(gonorrhea_grouped$Incidence.Rate.2006/1000)
+gonorrhea_grouped$weight2007<-gonorrhea_grouped$Cases.2007.Female.15.44*(gonorrhea_grouped$Incidence.Rate.2007/1000)
+gonorrhea_grouped$weight2008<-gonorrhea_grouped$Cases.2008.Female.15.44*(gonorrhea_grouped$Incidence.Rate.2008/1000)
+gonorrhea_grouped$weight2009<-gonorrhea_grouped$Cases.2009.Female.15.44*(gonorrhea_grouped$Incidence.Rate.2009/1000)
+
+#all weighted columns 
+gonorrhea_weighted<-select(gonorrhea_grouped,c(1:2,24,contains("weight")))
+```
+
+#### Gonorrhea: Visualizations
+The dataframe was then pivoted in the same fashion as the chlaymdia dataframe, to allow for clearer visualizations. The bar chart and heatmap use this pivoted dataframe to present the gonorrhea cases over the studied time frame. 
+
+```{r, warning = FALSE, message = FALSE}
+gonorrhea_pivot<-gonorrhea_weighted %>%
+  pivot_longer(
+    cols = 4:13,
+    names_to = "year",
+    values_to = "avg")
+gonorrhea_pivot$year<-str_replace(gonorrhea_pivot$year,"weight","")
+
+#barplot
+gonr_bar<-ggplot(gonorrhea_pivot,aes(x=Comm_Group,y=avg,fill=year,group=year))+
+  geom_bar(stat="identity",position = "dodge")+
+  theme_classic()+
+  theme(legend.position = "right") +
+  ggtitle("Average Gonorrhea Cases Among \n15-44 Year Old Females in Chicago") +
+  ylab("Weighted Avg of Gonorrhea Cases \nAmong 15-44 Year Old Females")+
+  xlab("Community Grouping") +scale_fill_brewer(palette="PiYG") +
+  labs(fill = "Year")
+
+gonr_bar + theme(plot.title = element_text(hjust=0.5))
+```
+
+As the bar chart shows above, there are clear differences in gonorrhea cases between the More and Most diverse community groups and the Least and Less diverse community groups. There also seems to be difference between the Moderate community groups and the more extreme community groups. However, we also see from this plot that the lack of data in the least/less diverse neighborhoods is apparent. This must also be taken into account, perhaps in further analysis in the next steps of the project. 
+
+```{r, warning = FALSE, message = FALSE}
+chicago_map_fertility = heat_map_continuous(regions = "CAs", 
+                                            #PUT IN ALL COLUMNS AS STRINGS
+                                            summary_df = gonorrhea_pivot,
+                                            regions_var = "Community.Area", 
+                                            fill_var = "avg",
+                                            legend_name ="Gonorrhea Cases among 15-44 yr old women" , 
+                                            palette = "purple",
+                                            title = "Gonorrhea Cases in Chicago",
+                                            neighborhood_column = "Community.Area.Name",
+                                            statistic_of_interest = "avg",
+                                            statistic_label = "Avg chlamydia cases",
+                                            diversity_variable = "Comm_Group")
+
+ggplotly(chicago_map_fertility, tooltip = c("text"))
+```
+
+#### Gonorrhea: Statistical Analysis
+
+Finally, the statistical testing was conducted using ANOVA and the Tukey-Kramer HSD test. The results are summarized in the table below. 
+
+```{r, warning = FALSE, message = FALSE}
+source("source_code/stat_analysis/StatAnalysisGonorrhea.R")
+kable(tukey_results_gonr, escape = FALSE) %>%
+  kable_styling()
+```
+
+**Results and Interpretation**
+
+**Gonorrhea, Table 1:** P-Value Results of ANOVA statistical testing for Gonorrhea cases, by year.
+
+| **Year** | **P-Value** | 
+| :------- | :---------- |
+| 2000     | < 0.001     |
+| 2001     | < 0.001     |
+| 2002     | < 0.001     |
+| 2003     | < 0.001     |
+| 2004     | < 0.001     | 
+| 2005     | < 0.001     | 
+| 2006     | < 0.001     | 
+| 2007     | < 0.001     | 
+| 2008     | < 0.001     |
+| 2009     | < 0.001     |
+
+**Gonorrhea, Table 2.** Results of Tukey-Kramer HSD statistical testing for Gonorrhea cases, by year.* 
+
+| **Year** | **Statistically Significant Differences** |
+| :------- | :---------------------------------------- |
+| 2000     | Least - More/Most                         |
+|          | Less - More/Most                          |
+|          | Moderately - More/Most (More-Mod p=0.046) |
+|          |                                           |
+| 2001     | Least - More/Most                         |
+|          | Less - More/Most                          |
+|          | Moderately - Most                         |
+|          |                                           |
+| 2002     | Least - More/Most                         |
+|          | Less - More/Most                          |
+|          | Moderately - More/Most                    |
+|          |                                           |
+| 2003     | Least - Most                              |
+|          | Less - Most                               |
+|          | Moderately - Most                         |
+|          |                                           |
+| 2004     | Least - More/Most                         |
+|          | Less - More/Most                          |
+|          | Moderately - Most                         |
+|          |                                           |
+| 2005     | Least - More/Most                         |
+|          | Less - More/Most                          |
+|          | Moderately - Most                         |
+|          |                                           |
+| 2006     | Least - More/Most                         |
+|          | Less - More/Most                          |
+|          | Moderately - More/Most                    |
+|          |                                           |
+| 2007     | Least - More/Most                         |
+|          | Less - More/Most (More-Less p=0.047)      |
+|          | Moderately - Most                         |
+|          |                                           |
+| 2008     | Least - More/Most                         |
+|          | Less - More/Most                          |
+|          | Moderately - More/Most                    |
+|          |                                           |
+| 2009     | Least - More/Most                         |
+|          | Less - More/Most                          |
+|          | Moderately - More/Most                    |
+|          |                                           |
+
+*p-values reported for values close to 0.05 threshold, may require further testing
+
+As shown in the table of Tukey-Kramer results above, there were statistical differences in every year between the More/Most diverse community groups, and the Less/Least community groups. This confirmed the visual analysis conducted with the bar chart above. Between the moderately diverse and More/Most diverse groups, there was fluctuation in statistical difference through the years, but many of the p-values for these tests were close to the threshold of 0.05, similar to the chlamydia results. Due to this, further testing may be required to truly understand if there is a difference between these middle groups and the more extreme groups in terms of gonorrhea cases.
+
+## Maternal Health
+### Teen Mother Birth Rate
+Births to teen mothers have lasting economic and social impacts on the mother and the child. Given this connection, it is important to consider the prevalence of births to teen mothers when gauging female health within a community. Teen mother birth rate is defined as the number of births to teen mothers per 1,000 15-19 year old women in the population. 
+
+#### Teen Mother Birth Rates: Data Cleaning
+For graphical and statistical analysis of birth rates to teen mothers, we started with the file Teen_Moms_2000_2009.csv. This is the raw data of births to teen mothers in Chicago from 2000 to 2009 pulled from Kaggle [[4]](#ref4). The data contains raw births and birth rates (per 1000 women aged 15-19) and corresponding confidence intervals. We removed the row containing the Chicago-wide averages.
+
+```{r LoadData, message = FALSE, warning = FALSE}
+Teen_Moms_2000_2009 <- read_csv("data/health_stats/Teen_Moms_2000_2009.csv")
+
+# remove the Chicago-wide totals row
+TeenMomsCommunity<-Teen_Moms_2000_2009 %>% slice(-(nrow(Teen_Moms_2000_2009)))
+```
+
+Race data for each of the 77 community areas was scraped from Community Data Snapshot PDF files compiled by the [Chicago Metropolitan Agency for Planning](https://www.cmap.illinois.gov/data/community-snapshots). Preliminary cleaning, detailed below, was done in Excel.
+
+1. Community areas were ordered by their percentages of white residents (descending) and split into five groups (sizes of 16, 15, 15, 15, and 16 respectively).
+2. The community areas within each group were assigned a diversity score ranging from 1 to 5, 1 being the largest percentages of white residents and 5 being the smallest.
+3. We used VLOOKUP to merge the community area identifier (numeric, pulled from Teen_Moms_2000_2009) with the community area name.
+
+The cleaned race data is read into R as diversityScores.
+
+```{r DiversityScores, message = FALSE, warning = FALSE}
+# Diversity score for each neighborhood
+diversityScores<-read.csv("data/race_data/all_race_data_corrected.csv")
+
+# convert DiversityScore to factor for coloring in plotting
+diversityScores<-diversityScores %>% 
+  mutate(DiversityScore=as.factor(DiversityScore))
+```
+
+From TeenMomsCommunity, we selected birth rate data and melted the data so there was a row for each neighborhood and year combination. We joined this with the racial demographic data.
+
+```{r BirthRatesCleaning, message = FALSE, warning = FALSE}
+# list of names corresponding to diversity score (1,2,3,4,5)
+community_groups<-c("Least","Less","Moderately",
+                    "More","Most")
+
+# rows for every CA/year combo, with diversity score
+TeenMomsBirthRatesLong<-TeenMomsCommunity %>% 
+  select(c(1,2,contains("Rate"))) %>% 
+  gather(key="Year",value="BirthRate",
+         -`Community Area Name`,-`Community Area Number`) %>% 
+  mutate(Year=parse_number(Year)) %>% 
+  rename("CAs"="Community Area Number") %>% 
+  left_join(diversityScores,by=c("CAs")) %>% 
+  select(-c("Neighborhood")) %>% 
+  mutate(CommunityGroup=as.factor(community_groups[DiversityScore]))
+```
+
+We did the same cleaning for the raw birth count data.
+
+```{r BirthsCleaning, message = FALSE, warning = FALSE}
+# raw birth count, rows for every CA/year combo, with diversity score
+TeenMomsBirthsLong<-TeenMomsCommunity %>% 
+  select(c(1,2,contains("Births"))) %>% 
+  gather(key="Year",value="RawBirths",
+         -`Community Area Name`,-`Community Area Number`) %>% 
+  mutate(Year=parse_number(Year)) %>% 
+  rename("CAs"="Community Area Number") %>% 
+  left_join(diversityScores,by=c("CAs")) %>% 
+  select(-c("Neighborhood"))
+```
+
+We calculated an average birth rate by year for each diversity score category and added names corresponding to the numeric diversity score, called "CommunityGroup". This data frame was used to create a visualization comparing the average teen mother birth rates between the different community groups across 2000 to 2009.
+
+```{r AvgBirthRate, message = FALSE, warning = FALSE}
+# average births rates by diversity score
+AvgBR.by.DiversityScore<-TeenMomsBirthRatesLong %>% 
+  group_by(DiversityScore,Year) %>% 
+  mutate(AvgBirthRate=mean(BirthRate,na.rm=T)) %>% 
+  select(c("Year","DiversityScore","AvgBirthRate")) %>% 
+  distinct(Year,DiversityScore,AvgBirthRate) %>% 
+  mutate(CommunityGroup=as.factor(community_groups[DiversityScore]))
+```
+
+We joined the data on birth rate and raw birth count and calculated a birth rate per neighborhood and per year that was weighted by the raw births to teen mothers in that neighborhood. These weighted birth rates were averaged across community groups. This data frame was used to create a visualization showing the temporal trends in teen mother birth rate for each community group.
+
+```{r WeightedAvg, message = FALSE, warning = FALSE}
+TeenMomsJoin<-TeenMomsBirthRatesLong %>% 
+  left_join(TeenMomsBirthsLong,by=c("Community Area Name"="Community Area Name",
+                                    "Year"="Year",
+                                    "CAs"="CAs",
+                                    "DiversityScore"="DiversityScore"))
+
+TeenMomsWeightedBR<- TeenMomsJoin %>% 
+  replace_na(list(RawBirths=0,BirthRate=0)) %>% 
+  mutate(weightedBR=RawBirths*BirthRate) %>% 
+  group_by(DiversityScore,Year) %>% 
+  mutate(AvgWeightedBR=sum(weightedBR)/sum(RawBirths)) %>% 
+  select(c("DiversityScore","Year","AvgWeightedBR","CommunityGroup")) %>% 
+  distinct(Year,DiversityScore,AvgWeightedBR,CommunityGroup)
+```
+
+#### Teen Mother Birth Rates: Visualizations
+We created plots to show the average teen mother birth rates per year by community group, the temporal trends in the weighted average birth rates by community group, and the geographic distribution of teen mother birth rates across the Chicago neighborhoods. The final visualization used a Chicago heat map template posted on [GitHub](https://github.com/dmwelgus/MapChi).
+
+```{r barPlot, message = FALSE, warning = FALSE}
+ggplot(AvgBR.by.DiversityScore,aes(x=CommunityGroup,y=AvgBirthRate,
+                                   fill=as.factor(Year)))+
+  geom_bar(stat="identity",position = "dodge2")+
+  scale_fill_brewer(palette = "PiYG")+
+  xlab("Community Group")+
+  ylab("Avg. Birth Rate (per 1000 females 15-19)")+
+  guides(fill=guide_legend(title="Year"))+
+  ggtitle("Avg. Teen Mom Birth Rate by Year and Community Group")+
+  theme_classic()
+```
+
+```{r linePlot, message = FALSE, warning = FALSE}
+ggplot(TeenMomsWeightedBR,aes(x=Year,y=AvgWeightedBR,group=DiversityScore,
+                              color=CommunityGroup))+
+  geom_line()+
+  geom_point()+
+  ylab("Birth Rate (per 1000 females 15-19)")+
+  scale_x_discrete(limit=(c(2000:2009)))+
+  scale_color_manual(values = wes_palette("Cavalcanti1",n=5))+
+  ggtitle("Average Birth Rates Weighted by Raw Births")+
+  guides(color=guide_legend(title="Community Group")) +
+  theme_classic()
+```
+
+Communities with the most diversity (largest percentage non-white) had the highest birth rates to teen mothers year over year. Across all community groups, the weighted average birth rate to teen mothers decreased from 2000 to 2009.
+
+```{r ChicagoBRMap, message = FALSE, warning = FALSE}
+Chicago_CA_Avg_Br<-TeenMomsJoin %>% 
+  group_by(CAs) %>% 
+  mutate(AvgBirthRate=mean(BirthRate,na.rm=T)) %>% 
+  distinct(CAs,`Community Area Name`,DiversityScore,AvgBirthRate,CommunityGroup) %>% 
+  rename("Neighborhood"="Community Area Name")
+
+chicago_map_birth_rate = heat_map_continuous(regions = "CAs", 
+                                             summary_df = Chicago_CA_Avg_Br,
+                                             regions_var = "CAs", 
+                                             fill_var = "AvgBirthRate",
+                                             legend_name = "Avg Birth Rate", 
+                                             palette = "purple",
+                                             title="Teen Mother Birth Rate (averaged over 2000-2009)",
+                                             neighborhood_column = "Neighborhood",
+                                             statistic_of_interest = c("AvgBirthRate"),
+                                             statistic_label = c("Birth Rate"),
+                                             diversity_variable = "CommunityGroup")
+ggplotly(chicago_map_birth_rate, tooltip = c("text"))
+```
+
+#### Teen Mother Birth Rates: Statistical Analysis
+To test if there were differences in average teen mother birth rates among the community groups (least, less, moderately, more and most diverse), we used a one-way analysis of variance test with post-hoc analysis preformed using the Tukey method. The script "StatAnalysis.R" runs the aov and TukeyHSD functions against the "TeenMomsBirthRatesLong" data for each year. The following community groups had significant differences between their average teen mother birth rates during the corresponding years.
+
+```{r, warning = FALSE, message = FALSE}
+source("source_code/stat_analysis/StatAnalysisTeenMothers.R")
+```
+
+```{r results='asis', message = FALSE, warning = FALSE}
+# sig.diffs = AnovaTukeySigDiffs(TeenMomsBirthRatesLong)
+kable(tukey_results_tm, escape = FALSE) %>%
+  kable_styling()
+```
+
+**Results and Interpretation**
+
+**Teen Mother Birth Rates, Table 1:** P-Value Results of ANOVA statistical testing for birth rates to teen mothers, by year.
+
+| **Year** | **P-Value** | 
+| :------- | :---------- |
+| 2000     | < 0.001     |
+| 2001     | < 0.001     |
+| 2002     | < 0.001     |
+| 2003     | < 0.001     |
+| 2004     | < 0.001     | 
+| 2005     | < 0.001     | 
+| 2006     | < 0.001     | 
+| 2007     | < 0.001     | 
+| 2008     | < 0.001     |
+| 2009     | < 0.001     |
+
+Since there were statistically significant findings from the one-way ANOVA testing above, we decided to further look into the differences at a community group level using the Tukey-Kramer HSD Post-Hoc test.
+
+**Teen Mother Birth Rates, Table 2.** Results of Tukey-Kramer HSD statistical testing for teen mother birth rates, by year.
+
+| **Year** | **Statistically Significant Differences** |
+| :------- | :---------------------------------------- |
+| 2000    | Least - Moderately/More/Most               |
+|         | Less - Moderately/More/Most                |
+|         | Moderately - Most                          |
+| 2001    | Least - Moderately/More/Most               |
+|         | Less - Moderately/More/Most                |
+|         | Moderately - Most                          |
+| 2002    | Least - Moderately/More/Most               |
+|         | Less - Moderately/More/Most                |
+| 2003    | Least - Moderately/More/Most               |
+|         | Less - Moderately/More/Most                |
+|         | Moderately - Most                          |
+| 2004    | Least - Moderately/More/Most               |
+|         | Less - More/Most                           |
+| 2005    | Least - Moderately/More/Most               |
+|         | Less - Moderately/More/Most                |
+|         | Moderately - More/Most                     |
+| 2006    | Least - Moderately/More/Most               |
+|         | Less - More/Most                           |
+|         | Moderately - Most                          |
+| 2007    | Least - Moderately/More/Most               |
+|         | Less - Moderately/More/Most                |
+|         | Moderately - Most                          |
+| 2008    | Least - Moderately/More/Most               |
+|         | Less - More/Most                           |
+| 2009    | Least - Moderately/More/Most               |
+|         | Less - Moderately/More/Most                |
+|         | Moderately - Most                          |
+
+### General Fertility Rates
+
+#### General Fertility Rates: Data Cleaning
+We read in the raw data files representing both general fertility rates in Chicago and the overall birth rates to women 15-44 years old from Kaggle [[4]](#ref4). Though this section is evaluating trends in general fertility in Chicago, we also used the birth rate dataset for the same years in order to back-calculate the raw counts of women who gave birth in each year in order to recalculate the aggregate fertility rate for each community group.
+
+```{r rawData}
+# read in raw data files for fertility rates, birth rates, and race
+general_fertility = read.csv(paste0("data/health_stats/public-health-statistics-general",
+                                    "-fertility-rates-in-chicago-by-year-1999-2009.csv"))
+births = read.csv(paste0("data/health_stats/public-health-statistics-births-and-",
+                         "birth-rates-in-chicago-by-year-1999-2009.csv"))
+```
+
+Then, we renamed the neighborhoods in the public health datasets so that they were consistent with the neighborhood names in the race dataset. For example, a neighborhood called "Loop" became "The Loop". 
+
+```{r standardNeighborhoods}
+# reconcile naming differences in neighborhood names in race and fertility datasets
+general_fertility$Community.Area.Name = renameNeighborhoods(general_fertility)
+births$Community.Area.Name = renameNeighborhoods(births)
+```
+
+Here we removed the columns that represented the bounds of the 95% confidence intervals for the birth and fertility rates for each year and also removed data from 1999, leaving only the point estimates for 2000-2009.
+
+```{r removeCI}
+# remove confidence interval columns; only include point estimates for each year
+fertility_rate = general_fertility[1:77, c(1, 2, seq(6, ncol(general_fertility), 3))]
+births = births[1:77, c(1, 2, seq(7, ncol(births), 4))]
+```
+
+After narrowing the data down, we transposed both datasets so that each row had a (Neighborhood, year) pairing, for a total of 770 entries (10 years of data for 77 neighborhoods). After transposing the datasets, we joined the birth rate and fertility rate datasets into one. Then, using the formula $\frac{births * 1000}{fertility\_rate}$, we calculated an estimate of the raw count of how many women aged 15-44 gave birth each year and recalculated the cumulative birth rate for each of the 5 community groups using $\frac{total\_births}{total\_women}*1000$.
+
+```{r transposeLonger, warning = FALSE, message = FALSE}
+# transform dataset so that each row represents the point estimate for fertility
+# in each neighborhood for the years 2000-2009
+fertility_rate = pivotLonger(fertility_rate, seq(3,12), "year", "fertility_rate")
+
+# transform dataset so that each row represents point estimate for birth rates
+# in each neighborhood for the years 2000-2009
+births = pivotLonger(births, seq(3,12), "year", "births")
+
+births_and_fertility = fertility_rate %>%
+  # join fertility and birth rate datasets on neighborhood and year
+  inner_join(births, by = c("Community.Area.Name", "year")) %>%
+  # calculate the raw number of women who gave birth each year
+  mutate(women_15_44 = (births * 1000) / fertility_rate)
+
+# join race data to get estimates of proportions of race in each neighborhood
+# in 2000
+births_and_fertility = join_with_race(births_and_fertility, race) %>%
+  group_by(diversity_score, year) %>%
+  # find aggregate measures for each community diversity grouping for 2000-2009
+  mutate(total_births = sum(births), total_women = sum(women_15_44),
+         fertility_rate_per_1000 = 
+           round((total_births / total_women) * 1000, 3)) %>%
+  select(-c(fertility_rate, births, women_15_44, White.Non.Hispanic_2000))
+```
+
+#### General Fertility Rates: Visualizations
+
+```{r fertilityLineChart, warning = FALSE, message = FALSE}
+# line chart depicting the change in fertility rate for each diversity grouping
+# between 2000 and 2009
+line_chart = births_and_fertility %>%
+  ggplot(aes(x = year, y = fertility_rate_per_1000, 
+             group = as.factor(community_group))) +
+  geom_line(aes(color = as.factor(community_group))) +
+  geom_point(aes(color = as.factor(community_group))) +
+  scale_color_manual(values = c("cadetblue1", "orange", "darkolivegreen1", 
+                                "lightpink", "deepskyblue")) +
+  ggtitle("Fertility Rate per 1000 Women\nby Community Group & Year") +
+  labs(x = "Year", 
+       y = "Fertility Rate per 1000 Women") +
+  scale_color_manual(values = wes_palette("Cavalcanti1", n = 5)) +
+  labs(color = "Community Group by Diversity") +
+  theme_classic() +
+  theme(plot.title = element_text(hjust = .5),
+        plot.subtitle = element_text(hjust = .5),
+        plot.caption = element_text(hjust = 0),
+        text = element_text(family = "sans"))
+line_chart
+```
+
+Overall, the fertility rate was consistently lower in the least diverse neighborhood group for all years. Fertility rate trended downwards in the moderately to most diverse neighborhoods while it increased in the least diversity neighborhood. Throughout the years observed, the fertility rate in the second least diversity community remained around 62%.
+
+```{r, message = FALSE, warning = FALSE}
+chicago_map_fertility = heat_map_continuous(regions = "CAs", 
+                                            summary_df = births_and_fertility,
+                                            regions_var = "Community.Area.Number",
+                                            fill_var = "fertility_rate_per_1000",
+                                            legend_name = "Fertility Rate Per 1000 Women", 
+                                            palette = "purple",
+                                            title = "General Fertility Rates 2000-2009",
+                                            neighborhood_column = "Community.Area.Name",
+                                            statistic_of_interest = "total_births",
+                                            statistic_label = "Total Births",
+                                            diversity_variable = "community_group")
+ggplotly(chicago_map_fertility, tooltip = c("text"))
+```
+
+This map shows a heatmap overlayed onto a map of Chicago broken down by neighborhood with the color intensity representing the relative fertility rate per 1,000 women.
+
+#### General Fertility Rates: Statistical Analysis
+```{r, message = FALSE, warning = FALSE}
+source("source_code/stat_analysis/StatAnalysisFertility.R")
+kable(tukey_results_fertility, escape = FALSE) %>%
+  kable_styling()
+```
+
+**Results and Interpretation**
+
+In order to test if there were differences in general fertility rates between each of the 5 community groups, we used a one-way ANOVA test with post-hoc analyses performed using the Tukey-Kramer HSD method for each year between 2000 and 2009. We found that each year, there were one or more statistically significant differences in fertility rate between the community groups.
+
+**General Fertility Rates, Table 1:** P-Value Results of ANOVA statistical testing for fertility rates, by year.
+
+| **Year** | **P-Value**         |
+| :------- | :------------------ |
+| 2000     | < 0.001             |
+| 2001     | < 0.001             |
+| 2002     | < 0.001             |
+| 2003     | < 0.001             |
+| 2004     | < 0.001             |
+| 2005     | < 0.001             |
+| 2006     | < 0.001             |
+| 2007     | < 0.001             |
+| 2008     | < 0.001             |
+| 2009     | < 0.001             |
+
+After performing the Tukey-Kramer HSD Post-Hoc test, we found that there were statistically significant differences between all 5 community groups as seen in the table below:
+
+**General Fertility Rates, Table 2:** Results of Tukey-Kramer HSD statistical testing for fertility rates, by year.
+
+| **Year** | **Statistically Significant Differences** |
+| :------- | :---------------------------------------- |
+| 2000     | Less – Least                              |
+|          | Moderately – Less/Least                   |
+|          | More – Moderately/Less/Least              |
+|          | Most – More/Moderately/Less/Least         |
+| 2001     | Less – Least                              |
+|          | Moderately – Less/Least                   |
+|          | More – Moderately/Less/Least              |
+|          | Most – More/Moderately/Less/Least         |
+| 2002     | Less – Least                              |
+|          | Moderately – Less/Least                   |
+|          | More – Moderately/Less/Least              |
+|          | Most – More/Moderately/Less/Least         |
+| 2003     | Less – Least                              |
+|          | Moderately – Less/Least                   |
+|          | More – Moderately/Less/Least              |
+|          | Most – More/Moderately/Less/Least         |
+| 2004     | Less – Least                              |
+|          | Moderately – Less/Least                   |
+|          | More – Moderately/Less/Least              |
+|          | Most – More/Moderately/Less/Least         |
+| 2005     | Less – Least                              |
+|          | Moderately – Less/Least                   |
+|          | More – Moderately/Less/Least              |
+|          | Most – More/Moderately/Less/Least         |
+| 2006     | Less – Least                              |
+|          | Moderately – Less/Least                   |
+|          | More – Moderately/Less/Least              |
+|          | Most – More/Moderately/Less/Least         |
+| 2007     | Less – Least                              |
+|          | Moderately – Less/Least                   |
+|          | More – Moderately/Less/Least              |
+|          | Most – More/Moderately/Less/Least         |
+| 2008     | Less – Least                              |
+|          | Moderately – Less/Least                   |
+|          | More – Moderately/Less/Least              |
+|          | Most – More/Moderately/Less/Least         |
+| 2009     | Less – Least                              |
+|          | Moderately – Less/Least                   |
+|          | More – Moderately/Less/Least              |
+|          | Most – More/Moderately/Less/Least         |
+
+### Prenatal Care
+#### Prenatal Care: Data Cleaning
+
+##### Data Cleaning in Excel
+
+Downloaded prenatal care data from Kaggle [[4]](#ref4) and performed initial data cleaning in Excel. See steps below for data cleaning done on prenatal care data in Excel. See Excel worksheets in `excel_files/` for the formulas used.
+
+1. Assigned each neighborhood to a community group based on the proportion of the total population that was white. We divided neighborhoods into 5 community groups: least diverse, less diverse, moderately diverse, more diverse, most diverse.
+
+2. Removed the following variables / columns from the prenatal care data:
+
+* 1999 data
+
+* Confidence interval columns
+
+* Warnings
+
+3. Separated prenatal care data into different tabs by timing of initiation of prenatal care (i.e. first trimester, second trimester, third trimester, and no prenatal care). The first trimester, second trimester, third trimester, and no prenatal care groupings are referred to as the sub prenatal care data in future steps. 
+
+* Note that for this analysis, we did not include the "not given" category. We decided to focus on prenatal care that was initiated in the first, second, and third trimester, and also the percent of births with no prenatal care.
+
+4. Within each sub prenatal care data tab: added a column that includes total births by community grouping, for each year of data.
+
+5. Within each sub prenatal care data tab: added a column with a weighted average percent of prenatal care initiated in specified trimester (or weighted average percent of no prenatal care) by community grouping.
+
+6. For the data in each sub prenatal care tab: copied data from those tabs into the following spreadsheets to load into R for the analysis section below:
+
+* Trimester one data: `health_stats/prenatal_care_data/prenatal_care_trimesterOne_allData.csv`
+
+* Trimester two data: `health_stats/prenatal_care_data/prenatal_care_trimesterTwo_allData.csv`
+
+* Trimester three data: `health_stats/prenatal_care_data/prenatal_care_trimesterThree_allData.csv`
+
+* No prenatal care data: `health_stats/prenatal_care_data/prenatal_care_none_allData.csv`
+
+7. Created a summary tab with the weighted average percent of prenatal care initiated in specified trimester (or weighted average percent of no prenatal care) by year and community grouping.
+
+8. Copied the weighted average percent of prenatal care initiated in specified trimester (or weighted average percent of no prenatal care) by year and community grouping into the following spreadsheets to load into R for the data visualization section below:
+
+* Trimester one: `health_stats/prenatal_care_data/prenatal_care_summary_trimesterone.csv`
+
+* Trimester two: `health_stats/prenatal_care_data/prenatal_care_summary_trimestertwo.csv`
+
+* Trimester one: `health_stats/prenatal_care_data/prenatal_care_summary_trimesterthree.csv`
+
+* No prenatal care: `health_stats/prenatal_care_data/prenatal_care_summary_none.csv`
+
+##### Data Cleaning in R
+
+For each summary data set of the prenatal care data, these were the data cleaning steps performed:
+
+1. Loaded summary csv into R.
+
+2. Renamed year columns of data set.
+
+3. Modified summary data set, using Tidyverse, from wider to longer form.
+
+4. Re-leveled the community groups to be in order from least diverse to most diverse.
+
+5. Stored the "Chicago"-level data in a separate data frame.
+
+6. Removed the "Chicago"-level data from the main summary data frame. 
+
+7. After the sub prenatal care summary data was cleaned, combined the four summary data frames into one data frame to use in the data visualization section below.
+
+The R code below is the data cleaning performed on the first trimester summary data.
+
+```{r, message = FALSE, warning = FALSE}
+#loading data into R
+prenatal_care_trimesterOne <- 
+  read.csv("data/health_stats/prenatal_care_data/prenatal_care_summary_trimesterone.csv")
+
+#renaming columns
+colnames(prenatal_care_trimesterOne) <- c("Community Group", "2000", 
+                                          "2001", "2002", "2003", "2004", 
+                                          "2005", "2006", "2007", "2008", "2009")
+```
+
+```{r, message = FALSE, warning = FALSE}
+#changing data frame from wide to long format
+prenatal_care_trimesterOne_modified <- prenatal_care_trimesterOne
+
+prenatal_care_trimesterOne_modified <- prenatal_care_trimesterOne_modified %>%
+  pivot_longer(
+    cols = c(2:11),
+    names_to = "Year",
+    values_to = "Percent"
+  )
+
+prenatal_care_trimesterOne_modified$`Community Group` <- 
+  factor(prenatal_care_trimesterOne_modified$`Community Group`, 
+         levels = c("Least", "Less", "Moderately", "More", "Most", "Chicago"))
+
+#storing Chicago entries in alternate data frame 
+prenatal_care_trimesterOne_Chicago <- prenatal_care_trimesterOne_modified[51:60,]
+
+#removing Chicago entries from main data frame
+prenatal_care_trimesterOne_modified <- prenatal_care_trimesterOne_modified[-c(51:60),]
+```
+
+The R code below is the data cleaning performed on the second trimester summary data.
+
+```{r, message = FALSE, warning = FALSE}
+#loading data into R
+prenatal_care_trimesterTwo <- 
+  read.csv("data/health_stats/prenatal_care_data/prenatal_care_summary_trimestertwo.csv")
+
+#renaming columns
+colnames(prenatal_care_trimesterTwo) <- c("Community Group", "2000", "2001", 
+                                          "2002", "2003", "2004", "2005",
+                                          "2006", "2007", "2008", "2009")
+```
+
+```{r, message = FALSE, warning = FALSE}
+#changing data frame from wide to long format
+prenatal_care_trimesterTwo_modified <- prenatal_care_trimesterTwo
+
+prenatal_care_trimesterTwo_modified <- prenatal_care_trimesterTwo_modified %>%
+  pivot_longer(
+    cols = c(2:11),
+    names_to = "Year",
+    values_to = "Percent"
+  )
+
+prenatal_care_trimesterTwo_modified$`Community Group` <- 
+  factor(prenatal_care_trimesterTwo_modified$`Community Group`, 
+         levels = c("Least", "Less", "Moderately", "More", "Most", "Chicago"))
+
+#storing Chicago entries in alternate data frame 
+prenatal_care_trimesterTwo_Chicago <- prenatal_care_trimesterTwo_modified[51:60,]
+
+#removing Chicago entries from main data frame
+prenatal_care_trimesterTwo_modified <- prenatal_care_trimesterTwo_modified[-c(51:60),]
+```
+
+The R code below is the data cleaning performed on the third trimester summary data.
+
+```{r, message = FALSE, warning = FALSE}
+#loading data into R
+prenatal_care_trimesterThree <- 
+  read.csv("data/health_stats/prenatal_care_data/prenatal_care_summary_trimesterthree.csv")
+
+#renaming columns
+colnames(prenatal_care_trimesterThree) <- c("Community Group", "2000", "2001", 
+                                            "2002", "2003", "2004", "2005",
+                                            "2006", "2007", "2008", "2009")
+```
+
+```{r, message = FALSE, warning = FALSE}
+#changing data frame from wide to long format
+prenatal_care_trimesterThree_modified <- prenatal_care_trimesterThree
+
+prenatal_care_trimesterThree_modified <- prenatal_care_trimesterThree_modified %>%
+  pivot_longer(
+    cols = c(2:11),
+    names_to = "Year",
+    values_to = "Percent"
+)
+
+prenatal_care_trimesterThree_modified$`Community Group` <- 
+  factor(prenatal_care_trimesterThree_modified$`Community Group`, 
+         levels = c("Least", "Less", "Moderately", "More", "Most", "Chicago"))
+
+#storing Chicago entries in alternate data frame 
+prenatal_care_trimesterThree_Chicago <- prenatal_care_trimesterThree_modified[51:60,]
+
+#removing Chicago entries from main data frame
+prenatal_care_trimesterThree_modified <- prenatal_care_trimesterThree_modified[-c(51:60),]
+```
+
+The R code below is the data cleaning performed on the no prenatal care summary data.
+
+```{r, message = FALSE, warning = FALSE}
+#loading data into R
+prenatal_care_none <- 
+  read.csv("data/health_stats/prenatal_care_data/prenatal_care_summary_none.csv")
+
+#renaming columns 
+colnames(prenatal_care_none) <- c("Community Group", "2000", "2001", "2002", 
+                                  "2003", "2004", "2005", "2006", "2007", 
+                                  "2008", "2009")
+```
+
+```{r, message = FALSE, warning = FALSE}
+#changing data frame from wide to long format
+prenatal_care_none_modified <- prenatal_care_none
+
+prenatal_care_none_modified <- prenatal_care_none_modified %>%
+  pivot_longer(
+    cols = c(2:11),
+    names_to = "Year",
+    values_to = "Percent"
+  )
+
+prenatal_care_none_modified$`Community Group` <- 
+  factor(prenatal_care_none_modified$`Community Group`, 
+         levels = c("Least", "Less", "Moderately", "More", "Most", "Chicago"))
+
+#storing Chicago entries in alternate data frame 
+prenatal_care_none_Chicago <- prenatal_care_none_modified[51:60,]
+
+#removing Chicago entries from main data frame
+prenatal_care_none_modified <- prenatal_care_none_modified[-c(51:60),]
+```
+
+The R code below combines the first, second, and third trimester, and no prenatal care "cleaned" data frames into one data frame.
+
+```{r, message = FALSE, warning = FALSE}
+#combining data frames
+prenatal_care_trimesterOne_modified$Trimester <- "Trimester One"
+#View(prenatal_care_trimesterOne_modified)
+prenatal_care_trimesterTwo_modified$Trimester <- "Trimester Two"
+#View(prenatal_care_trimesterTwo_modified)
+prenatal_care_trimesterThree_modified$Trimester <- "Trimester Three"
+#View(prenatal_care_trimesterThree_modified)
+prenatal_care_none_modified$Trimester <- "None"
+#View(prenatal_care_none_modified)
+
+prenatal_care_all <- rbind(prenatal_care_trimesterOne_modified, 
+                           prenatal_care_trimesterTwo_modified, 
+                           prenatal_care_trimesterThree_modified, 
+                           prenatal_care_none_modified)
+
+#releveling sub data frames
+prenatal_care_all$Trimester <- factor(prenatal_care_all$Trimester, 
+                                      levels = c("Trimester One", "Trimester Two",
+                                                 "Trimester Three", "None"))
+```
+
+#### Prenatal Care: Visualizations
+
+After the prenatal care data were cleaned and combined, we visualized the average percent of births where prenatal care was initiated in the specified trimester, and the average percent of births where there was no prenatal care, by year and community grouping. The bar chart below provides a visual summary of the trends of when pregnant women initiated prenatal care, and allows us to visually compare the differences in initiation of prenatal care between the five community groups. See text below the chart for an interpretation of prenatal care trends in Chicago from 2000 to 2009. 
+
+The R code below creates the data visualization for the prenatal care data.
+
+```{r, message = FALSE}
+#creating bar chart for prenatal care data
+prenatal_care_all_bar <- ggplot(prenatal_care_all, 
+                                aes(x = `Community Group`, y = Percent, 
+                                    fill = Year)) +
+  geom_bar(stat="identity", position = position_dodge(), alpha = 0.75)+
+  scale_fill_brewer(palette = "PiYG")+
+  ggtitle("Initiation of Prenatal Care by Community Group & Year") +
+  labs(x = "Community Group", 
+       y = "Percent of Total Births")+
+  guides(fill=guide_legend(title = "Year"))+
+  theme_classic()+
+  theme(plot.title = element_text(hjust = .5),
+        plot.subtitle = element_text(hjust = .5),
+        plot.caption = element_text(hjust = 0),
+        #text = element_text(family = "sans"),
+        axis.text.x = element_text(angle=90))+
+  facet_grid(.~Trimester) 
+prenatal_care_all_bar
+```
+
+This chart illuminates trends in initiation of prenatal care and illustrates the differences in prenatal care between the community groups. Looking at the trimester one block, the least diverse community had the highest rates of initiating prenatal care in the first trimester. The less, moderately, and more diverse communities had similar rates of initiating prenatal care in the first trimester, and the rates of initiating prenatal care in the first trimester among these three community groups were slightly lower than that for the least diverse community group. The most diverse community group had the lowest rates of initiating prenatal care in the first trimester of the five community groups evaluated. Looking at the trimester two block, there are notable differences in the percent of births where prenatal care was initiated in the second trimester between community groups. The least diverse community group had the lowest percentages of prenatal care initiated in the second trimester and the most diverse community group had the highest percentages of prenatal care initiated in the second trimester; the percentage of prenatal care initiated in the second trimester increased as diversity increased. Looking at the Trimester Three block, the differences between community groups in percent of births initiating prenatal care in the third trimester are smaller when compared to the differences between community groups in percent of births initiating prenatal care in the first or second trimester. However, rates of prenatal care initiated in the third trimester are slightly lower in the least and less diverse community groups and rates of prenatal care initiated in the third trimester are slightly higher in the moderately, more, and most diverse community groups. Lastly, looking at the none block, the percent of births with no prenatal care is low across all community groups. However, the percent of births with no prenatal care is lower among the least and less diverse community groups compared to the moderately, more, and most diverse community groups. Overall, this chart tells us that, among births from 2000 to 2009 in Chicago, mothers in the least and less diverse community groups initiated prenatal care earlier in pregnancy at higher rates compared to mothers in the moderately, more, and most diverse community groups.   
+
+#### Prenatal Care: Statistical Analysis
+
+For each of the sub prenatal care data sets (i.e. trimester one, trimester two, trimester three, and no prenatal care), ANOVA and Tukey-Kramer HSD statistical testing was conducted, by year. 
+
+```{r, warning = FALSE, message = FALSE}
+# source code for all ANOVA and Tukey Post-Hoc Tests
+source("source_code/stat_analysis/StatAnalysisPrenatalCare.R")
+```
+
+The R code below is statistical testing for the first trimester data.
+
+```{r, message = FALSE, warning = FALSE}
+#loading data into R
+prenatal_care_trimesterOne_all <- 
+  read.csv("data/health_stats/prenatal_care_data/prenatal_care_trimesterOne_allData.csv")
+
+#removing Chicago row
+prenatal_care_trimesterOne_all <- prenatal_care_trimesterOne_all[-78,]
+
+#performing ANOVA & Tukey HSD analyses
+# full code found in StatAnalysisPrenatalCare.R
+kable(prenatal_tri1_anova(), escape = FALSE) %>%
+  kable_styling()
+```
+
+The R code below is statistical testing for the second trimester data.
+
+```{r, message = FALSE, warning = FALSE}
+#loading data into R
+prenatal_care_trimesterTwo_all <- 
+  read.csv("data/health_stats/prenatal_care_data/prenatal_care_trimesterTwo_allData.csv")
+#View(prenatal_care_trimesterTwo_all)
+
+#removing Chicago row
+prenatal_care_trimesterTwo_all <- prenatal_care_trimesterTwo_all[-78,]
+
+#performing ANOVA & Tukey HSD analyses
+# full code found in StatAnalysisPrenatalCare.R
+kable(prenatal_tri2_anova(), escape = FALSE) %>%
+  kable_styling()
+```
+
+The R code below is statistical testing for the third trimester data.
+
+```{r, message = FALSE, warning = FALSE}
+#loading data into R
+prenatal_care_trimesterThree_all <- 
+  read.csv("data/health_stats/prenatal_care_data/prenatal_care_trimesterThree_allData.csv")
+#View(prenatal_care_trimesterThree_all)
+
+#removing Chicago row
+prenatal_care_trimesterThree_all <- prenatal_care_trimesterThree_all[-78,]
+
+# full code found in StatAnalysisPrenatalCare.R
+kable(prenatal_tri3_anova(), escape = FALSE) %>%
+  kable_styling()
+```
+
+The R code below is statistical testing for the no prenatal care data.
+
+```{r, message = FALSE, warning = FALSE}
+#loading data into R
+prenatal_care_none_all <- 
+  read.csv("data/health_stats/prenatal_care_data/prenatal_care_none_allData.csv")
+#View(prenatal_care_none_all)
+
+#removing Chicago row
+prenatal_care_none_all <- prenatal_care_none_all[-77,]
+
+# full code found in StatAnalysisPrenatalCare.R
+kable(prenatal_none_anova(), escape = FALSE) %>%
+  kable_styling()
+```
+
+**Results and Interpretation**
+
+The results from the ANOVA and Tukey-Kramer HSD statistical testing are shown below. The first table shows the p-value results of the ANOVA statistical testing, by trimester and by year. The second table lists the community groups with statistically significant differences in percent of births with prenatal care initiated in the specified trimester, and percent of births with no prenatal care, by year. 
+
+**Prenatal Care, Table 1:** P-Value Results of ANOVA statistical testing for prenatal care data, by timing and year.
+
+| **Year** | **First Trimester** | **Second Trimester** | **Third Trimester** | **None** |
+| :------- | :------------------ | :------------------- | :------------------ | :------- |
+| 2000     | < 0.001             | < 0.001              | < 0.001             | < 0.001  | 
+| 2001     | < 0.001             | < 0.001              | 0.00469             | < 0.001  |
+| 2002     | < 0.001             | < 0.001              | 0.0336              | < 0.001  |
+| 2003     | < 0.001             | < 0.001              | 0.00111             | < 0.001  |
+| 2004     | 0.00106             | < 0.001              | 0.00287             | < 0.001  |
+| 2005     | < 0.001             | < 0.001              | < 0.001             | < 0.001  |
+| 2006     | < 0.001             | < 0.001              | < 0.001             | < 0.001  |
+| 2007     | 0.0428              | < 0.001              | < 0.001             | < 0.001  |
+| 2008     | 0.453               | < 0.001              | 0.3                 | < 0.001  |
+| 2009     | < 0.001             | < 0.001              | < 0.001             | < 0.001  |
+
+The Prenatal Care Table 1 above summarizes the results of the ANOVA statistical testing on the prenatal care data. *All* of the p-value results from the ANOVA statistical testing are shown, regardless if the results were statistically significant or not. The ANOVA statistical testing showed that statistically significant differences in the average percent of births that initiated prenatal care in the specified trimester (and average percent of births with no prenatal care) exist between community groups for almost every year evaluated. The only non-statistically significant results were observed for the year 2008, for the first trimester and third trimester. Based on these results, this means that there's a statistically significant difference in the average percent of births that initiated prenatal care in the specified trimester (or average percent of births with no prenatal care) for at least two of the five community groups for every year evaluated. To identify the community groups with statistically significant differences in the average percent of births initiating prenatal care in the specified trimester (or average percent of births with no prenatal care), we conducted Tukey-Kramer HSD statistical testing. See results and interpretation below.
+
+**Prenatal Care, Table 2:** Results of Tukey-Kramer HSD statistical testing for prenatal care data, by timing and year.
+
+| **Year** | **First Trimester**               | **Second Trimester**              | **Third Trimester**               | **None**                          |
+| :------- | :-------------------------------- | :-------------------------------- | :-------------------------------- | :-------------------------------- |
+| 2000     | Least - Less/Moderately/More/Most | Least - Less/Moderately/More/Most | Least - Less/Moderately/More/Most | Least - More/Most                 |
+|          | Less - Most                       | Less - Moderately/More/Most       |                                   | Most - Less/Moderately            |
+| 2001     | Least - Moderately/More/Most      | Least - Moderately/More/Most      | Least - Moderately/Most           | Least - More/Most                 |
+|          | Less - Most                       | Less - Moderately/More/Most       |                                   | Less - More/Most                  |
+|          |                                   |                                   |                                   | Moderately - More/Most            |
+|          |                                   |                                   |                                   | More - Most                       |
+| 2002     | Least - Less/Moderately/More/Most | Least - Less/Moderately/More/Most | Least - Most                      | Least - More/Most                 |
+|          | Most - Less/Moderately            | Less - More/Most                  |                                   | Less - More/Most                  |
+|          |                                   |                                   |                                   | Most - Moderately/More            |
+| 2003     | Least - Moderately/More/Most      | Least - Moderately/More/Most      | Most - Least/Less                 | Least - More/Most                 |
+|          | Most - Less/Moderately            | Less - More/Most                  |                                   | Less - More/Most                  |
+|          |                                   | Moderately - More/Most            |                                   | Moderately - More/Most            |
+|          |                                   |                                   |                                   | More - Most                       |
+| 2004     | Least - More/Most                 | Least - Moderately/More/Most      | Least - More/Most                 | Least - More/Most                 |
+|          |                                   | Less - Moderately/More/Most       |                                   | Less - More/Most                  |
+|          |                                   | Moderately - Most                 |                                   | Most - Moderately/More            |
+| 2005     | Least - More/Most                 | Least - Moderately/More/Most      | Least - More/Most                 | Least - More/Most                 |
+|          | Moderately - Most                 | Less - More/Most                  | Less - More/Most                  | Less - More/Most                  |
+|          |                                   | Moderately - More/Most            |                                   | Most - Moderately/More            |
+| 2006     | Least - More/Most                 | Least - Moderately/More/Most      | Least - More/Most                 | Least - More/Most                 |
+|          | Most - Less/Moderately            | Less - More/Most                  | Less - More/Most                  | Most - Less/Moderately/More       |
+|          |                                   | Moderately - More/Most            | Moderately - Most                 |                                   |
+| 2007     | n/a                               | Least - More/Most                 | Least - More/Most                 | Least - More/Most                 |
+|          |                                   | Less - More/Most                  | Most - Less/Moderately            | Less - More/Most                  |
+|          |                                   | Moderately - More/Most            |                                   | Moderately - More/Most            |
+| 2008     | n/a                               | Least - More/Most                 | n/a                               | Least - More/Most                 |
+|          |                                   | Less - More/Most                  |                                   | Less - More/Most                  |
+|          |                                   | Moderately - More/Most            |                                   | Moderately - More/Most            |
+| 2009     | Least - Moderately/More/Most      | Least - Moderately/More/Most      | Most - Least/Less/Moderately/More | Least - More/Most                 |
+|          | Most - Less/Moderately            | Less - More/Most                  |                                   | Less - More/Most                  |
+|          |                                   | Moderately - More/Most            |                                   | Most - Moderately/More            |
+
+The Prenatal Care Table 2 above summarizes the results of the Tukey-Kramer HSD statistical testing conducted on the prenatal care data. Only community group pairings with *statistically significant* differences in average percent of total births initiating prenatal care in specified trimester (or average percent of births with no prenatal care) are included in the table. Here's an example of how to read the table: in the "First Trimester" column and "2000" row, the "Least - Less/Moderately/More/Most" is interpreted as: there was a statistically significant difference in the average percent of births that initiated prenatal care in the first trimester between the least diverse community group and less diverse community group; there was a statistically significant difference in the percent of births that initiated prenatal care in the first trimester between the least diverse community group and moderately diverse community group; there was a statistically significant difference in the percent of births that initiated prenatal care in the first trimester between the least diverse community group and more diverse community group; there was a statistically significant difference in the percent of births that initiated prenatal care in the first trimester between the least diverse community group and most diverse community group. There were statistically significant differences in the average percent of births initiating prenatal care in the specified trimester (and the average percent of births with no prenatal care) between many community groupings. The most statistically significant results were typically observed between the least and most diverse community groups. The results from the ANOVA and Tukey-Kramer HSD statistical testing support our inferences drawn from the bar chart above. The statistical testing allows us to conclude with more certainty that, among births from 2000 to 2009 in Chicago, mothers in the least and less diverse community groups initiated prenatal care in the first trimester at higher rates than mothers in the moderately, more, and most diverse community groups. These tests also allow us to conclude that mothers in the moderately, more, and most diverse community groups initiated prenatal care later, in the second or third trimester, or did not get any prenatal care, at higher rates than mothers in the least and less diverse community groups.
+
+### Preterm Births
+#### Preterm Births: Data Cleaning
+
+##### Data Cleaning in Excel
+
+Downloaded preterm births data from Kaggle [[4]](#ref4) and performed initial data cleaning in Excel. See steps below for data cleaning done on preterm births data in Excel. See Excel worksheets in `excel_files/` for the formulas used.
+
+1. Assigned each neighborhood to a community group based on the proportion of the total population that was white. We divided neighborhoods into 5 community groups: least diverse, less diverse, moderately diverse, more diverse, most diverse.
+
+2. Removed the following variables / columns from the preterm births data:
+
+* 1999 data
+
+* Confidence interval columns
+
+* Warnings
+
+3. Added a column that includes total births by community grouping, for each year of data.
+
+4. Added a column with a weighted average percent of preterm births by community grouping, for each year of data.
+
+6. For the data in the *data use* tab, copied data into the following spreadsheet to load into R for the analysis section below: `preterm_births_alldata.csv`.  
+
+7. Created a summary tab with the weighted average percent of preterm births, by year and community grouping.
+
+8. Copied the weighted average percent of preterm births by year and community grouping into the following spreadsheet to load into R for the data visualization section below: `preterm_births_summary.csv`.
+
+##### Data Cleaning in R
+
+These were the data cleaning steps performed on the preterm births summary data:
+
+1. Loaded summary csv into R.
+
+2. Renamed year columns of data set.
+
+3. Modified summary data set, using Tidyverse, from wider to longer format.
+
+4. Re-leveled the community groups to be in order from least diverse to most diverse.
+
+5. Stored the "Chicago"-level data in a separate data frame.
+
+6. Removed the "Chicago"-level data from the main summary data frame. 
+
+The R code below is the data cleaning performed on the preterm births summary data.
+
+```{r, message = FALSE, warning = FALSE}
+#loading data into R
+preterm_births <- 
+  read.csv("data/health_stats/preterm_births_data/preterm_births_summary.csv")
+
+#renaming columns
+colnames(preterm_births) <- c("Community Group", "2000", "2001", "2002", "2003",
+                              "2004", "2005", "2006", "2007", "2008", "2009")
+```
+
+```{r, message = FALSE, warning = FALSE}
+#changing data frame from wide to long format
+preterm_births_modified <- preterm_births
+
+preterm_births_modified <- preterm_births_modified %>%
+  pivot_longer(
+    cols = c(2:11),
+    names_to = "Year",
+    values_to = "Percent"
+)
+
+preterm_births_modified$`Community Group` <- factor(preterm_births_modified$`Community Group`, 
+                                                    levels = c("Least", "Less", "Moderately",
+                                                               "More", "Most", "Chicago"))
+
+#storing Chicago entries in alternate data frame 
+preterm_births_Chicago <- preterm_births_modified[51:60,]
+
+#removing Chicago entries from main data frame
+preterm_births_modified <- preterm_births_modified[-c(51:60),]
+```
+
+#### Preterm Births: Data Visualization
+
+We visualized the percent of preterm births by community grouping and year using the preterm births summary data (cleaned above). The line chart below provides a visual summary of the preterm birth trends and allows us to visually compare the differences in preterm birth rates between the five different community groups. See text below the chart for an interpretation of preterm birth trends in Chicago from 2000 to 2009.
+
+The R code below creates the data visualization for the preterm births data.
+
+```{r, message = FALSE, warning = FALSE}
+#creating line chart for preterm birth data
+preterm_births_line <- ggplot(preterm_births_modified, 
+                              aes(x = Year, y = Percent, 
+                                  group = `Community Group`)) +
+  geom_line(aes(color=`Community Group`)) + 
+  geom_point(aes(color=`Community Group`)) +
+  scale_color_manual(values = wes_palette("Cavalcanti1", n = 5)) +
+  ggtitle("Percent Preterm Births by Community Group & Year") +
+  labs(x = "Year", 
+       y = "Percent of Total Births") +
+  theme_classic() +
+  theme(plot.title = element_text(hjust = .5),
+        plot.subtitle = element_text(hjust = .5),
+        plot.caption = element_text(hjust = 0))
+preterm_births_line
+```
+
+Based on the line chart above, the average percent of preterm births is notably lower among the least, less, and moderately diverse community groups compared to the more and most diverse community groups. The differing trends between the community groups remained consistent / similar for each year from 2000 to 2009. This visualization indicates that there are differences in the average percent of preterm births between the different community groups. 
+
+#### Preterm Births: Statistical Analysis
+
+We conducted ANOVA and Tukey-Kramer HSD statistical testing on the preterm births data, by year. 
+
+```{r, warning = FALSE, message = FALSE}
+source("source_code/stat_analysis/StatAnalysisPretermBirths.R")
+```
+
+The R code below is statistical testing for the preterm births data.
+
+```{r, message = FALSE, warning = FALSE}
+#loading data into R
+preterm_births_all <- 
+  read.csv("data/health_stats/preterm_births_data/preterm_births_alldata.csv")
+
+#removing Chicago row
+preterm_births_all <- preterm_births_all[-78,]
+
+# full code found in StatAnalysisPretermBirths
+kable(preterm_anova(), escape = FALSE) %>%
+  kable_styling()
+```
+
+**Results and Interpretation**
+
+The results from the ANOVA and Tukey-Kramer HSD statistical testing are shown below. The first table shows the p-value results of the ANOVA statistical testing, by year. The second table lists the community group pairings with statistically significant differences in percent of preterm births, by year. 
+
+**Preterm Births, Table 1:** P-Value Results of ANOVA statistical testing for preterm births data, by year.
+
+| **Year** | **P-Value** | 
+| :------- | :---------- |
+| 2000     | < 0.001     |
+| 2001     | < 0.001     |
+| 2002     | < 0.001     |
+| 2003     | < 0.001     |
+| 2004     | < 0.001     | 
+| 2005     | < 0.001     | 
+| 2006     | < 0.001     | 
+| 2007     | < 0.001     | 
+| 2008     | < 0.001     |
+| 2009     | < 0.001     |
+
+The Preterm Births Table 1 above summarizes the results of the ANOVA statistical testing on the preterm births data. The ANOVA statistical testing showed that statistically significant results for the difference in the average percent of preterm births existed between community groups, for each year evaluated. These results indicate that there's a statistically significant difference in the average percent of preterm births between at least two of the five community groups, for each year evaluated. To identify the community group pairings with statistically significant differences in average percent of preterm births, we conducted Tukey-Kramer HSD statistical testing. See results and interpretation of Tukey-Kramer HSD statistical testing below. 
+
+**Preterm Births, Table 2:** Results of Tukey-Kramer HSD statistical testing for preterm births data, by year.
+
+| **Year** | **Statistically Significant Differences** | 
+| :------- | :---------------------------------------- |
+| 2000     | Least - More/Most                         |
+|          | Less - More/Most                          |
+|          | Moderately - More/Most                    |
+|          | More - Most                               |
+| 2001     | Least - More/Most                         |
+|          | Less - More/Most                          |
+|          | Most - Moderately/More                    |
+| 2002     | Less - More/Most                          |
+|          | Most - Least/Moderately/More              |
+| 2003     | Less - More/Most                          |
+|          | Moderately - More/Most                    |
+|          | Most - Least/More                         |
+| 2004     | Least - More/Most                         |
+|          | Less - More/Most                          |
+|          | Moderately - More/Most                    |
+|          | More - Most                               |
+| 2005     | Least - More/Most                         | 
+|          | Less - More/Most                          |
+|          | Moderately/Most                           |
+| 2006     | Most - Least/Less/Moderately/More         | 
+| 2007     | Least - More/Most                         | 
+|          | Less - More/Most                          |
+|          | Moderately - More/Most                    |
+| 2008     | Least - More/Most                         |
+|          | Less - More/Most                          |
+|          | Moderately - More/Most                    |
+| 2009     | Least - More/Most                         |
+|          | Less - More/Most                          |
+|          | Moderately - More/Most                    |
+
+The Preterm Births Table 2 above summarizes the results of the Tukey-Kramer HSD statistical testing conducted on the preterm births data. Only community group pairings with *statistically significant* differences in average percent of preterm births are included in the table. Here's an example of how to read the table above: looking at the "2000" year row, the "Least - More/Most" means that there was a statistically significant difference in the average percent of preterm births between the least and more diverse community groups, and there was a statistically significant difference in the average percent of preterm births between the least and most diverse community groups. As shown in the table, there were statistically significant differences in the average percent of preterm births between many community groupings. The most statistically significant results were typically observed between the least and most diverse community groups. The statistical testing allows us to conclude with more certainty that, among births from 2000 to 2009 in Chicago, preterm births occurred at higher rates among mothers that lived in more and most diverse communities, and that preterm births occurred at statistically significantly lower rates among mothers in the least, less, and moderately diverse communities. 
+
+### Infant Mortality Rates
+Next, we analyzed infant mortality. However, this dataset was quite small and only contained average numbers across 2005-2009, so it did not fully encompass all the years that we wanted to study. For this reason, we did a higher-level visual analysis using only the Chicago heatmap to get a superficial understanding of infant mortality across the Chicago neighborhoods.
+
+```{r, warning = FALSE, message = FALSE}
+im = read.csv("data/health_stats/public-health-statistics-infant-mortality-in-chicago-2005-2009.csv")
+```
+
+```{r, warning = FALSE, message = FALSE}
+im$Community.Area.Name = renameNeighborhoods(im)
+im_race = join_with_race(im, race) %>%
+  select(c(Community.Area, Community.Area.Name, Average.Infant.Mortality.Rate.2005...2009, White.Non.Hispanic_2000, community_group))
+```
+
+```{r, warning = FALSE, message = FALSE}
+chicago_heatmap_im = heat_map_continuous(regions = "CAs", 
+                                           summary_df = im_race,
+                                           regions_var = "Community.Area",
+                                           # fill each variable
+                                           fill_var = "Average.Infant.Mortality.Rate.2005...2009",
+                                           legend_name = "Average Infant Mortality Rate", 
+                                           palette = "purple",
+                                         title = "Average Infant Mortality Rate from 2005-2009",
+                                           # for the tooltip:
+                                           neighborhood_column = "Community.Area.Name",
+                                           statistic_of_interest = "Average.Infant.Mortality.Rate.2005...2009",
+                                           statistic_label = "Average Infant Mortality Rate",
+                                           diversity_variable = "community_group")
+ggplotly(chicago_heatmap_im, tooltip = c("text"))
+```
+
+The Chicago heat map above shows the average infant mortality rate for 2005 to 2009 by community grouping. As shown in the legend, the neighborhoods highlighted in darker purple shades have higher infant mortality rates, while the neighborhoods highlighted in lighter purple shades have lower infant mortality rates. The infant mortality rate was lowest among the least diverse community group, and increased as diversity increased; infant mortality rate was highest among the most diverse community group. The average infant mortality rate for the least diverse community group was less than 5.0 per 1,000 live births, while the average infant mortality rate was more than 13.0 per 1,000 live births, which means the average infant mortality rate was more than two times higher among the most diverse community group compared to the least diverse community group. The darker purple neighborhoods are those in the more and most diverse community groups, while the lighter purple neighborhoods are those in the least, less, and moderately diverse community groups.
+
+### Low Birthweight
+This dataset explores the annual number of low birth rates in Chicago from 2000-2009. Low birth rate is defined as birth weight of less than approximately 5 pounds, 8 ounces. We cleaned the data, and conducted the same visualizations and statistical testing that was done on all other datasets. 
+
+#### Low Birthweight: Data Cleaning
+```{r, warning = FALSE, message = FALSE}
+#loading datasets
+lbw.raw<-read_csv("data/health_stats/public-health-statistics-low-birth-weight-in-chicago-by-year-1999-2009.csv")
+```
+
+To clean the data, we select the columns that contained information only on percentage of low births. We then removed Chicago-wide average data, and renamed the columns for clarity. 
+
+```{r, warning = FALSE, message = FALSE}
+lbw.percent<-lbw.raw %>% 
+  select(c(1,2,contains("Percent"))) %>% 
+  select(-c(contains("CI"))) %>% 
+  slice(-(nrow(lbw.raw))) %>% 
+  rename("CAs"="Community Area","Neighborhood"="Community Area Name")
+```
+
+The next step was to manipulate the data. We pivoted the low birth weight percentage data to a longer-format dataframe, joined with the diversity score column, and added a string representation of community group. We then calculated average low birth weight percentage by community group and grouped by community group for easy visualization in the next portion of the analysis. 
+
+```{r, warning = FALSE, message = FALSE}
+community_groups<-c("Least","Less","Moderately","More","Most")
+
+lbw.percent.long<-lbw.percent %>% 
+  gather(key="Year",value="PercentLBW",-"Neighborhood",-"CAs") %>% 
+  mutate(Year=parse_number(Year)) %>% 
+  left_join(diversityScores,by=c("CAs")) %>% 
+  mutate(CommunityGroup=as.factor(community_groups[DiversityScore])) %>% 
+  filter(Year>1999)
+
+lbw.percent.avg<-lbw.percent.long %>% 
+  group_by(DiversityScore,Year) %>% 
+  mutate(AvgPercentLBW=mean(PercentLBW,na.rm=T)) %>% 
+  select(c("Year","DiversityScore","AvgPercentLBW","CommunityGroup")) %>% 
+  distinct(Year,DiversityScore,AvgPercentLBW,CommunityGroup)
+```
+
+#### Low Birthweight: Visualizations
+
+Below is the code for the visualizations, namely the bar chart and the heatmap of chicago. Below are the results. 
+```{r, warning = FALSE, message = FALSE}
+ggplot(lbw.percent.avg,aes(x=CommunityGroup,y=AvgPercentLBW,fill=as.factor(Year)))+
+  geom_bar(stat="identity",position = "dodge2")+
+  scale_fill_brewer(palette = "PiYG")+
+  xlab("Community Group")+
+  ylab("Avg. % of Low Birth Weight Births")+
+  guides(fill=guide_legend(title="Year"))+
+  ggtitle("Avg. % of Low Birth Weight Births by Year and Community Group")+
+  theme_classic()
+```
+
+From the bar chart above, we see a consistent trend in low birth weight increasing with community grouping level. Specifically, The low birth weight level is clearly delineated between the least/less/moderately diverse community groups and the more/most diverse community groups. To further explore this difference, we conduct statistical testing below. 
+
+To examine this trend at a higher level, we created a heatmap of Chicago representing annual low birth weights in each neighborhood. This was to support the visual analysis of the bar chart. 
+
+```{r, warning = FALSE, message = FALSE}
+chicago.avg.lbw<-lbw.percent.long %>% 
+  group_by(CAs) %>% 
+  mutate(AvgLBW=mean(PercentLBW,na.rm=T)) %>% 
+  distinct(CAs,Neighborhood.y,DiversityScore,AvgLBW,CommunityGroup)
+
+chicago_map_birth_rate = heat_map_continuous(regions = "CAs", 
+                                             summary_df = chicago.avg.lbw,
+                                             regions_var = "CAs", 
+                                             fill_var = "AvgLBW",
+                                             legend_name = "Avg Low Birth Weight %", 
+                                             palette = "purple",
+                                             title="Low Birth Weight % (averaged over 2000-2009)",
+                                             neighborhood_column = "Neighborhood.y",
+                                             statistic_of_interest = c("AvgLBW"),
+                                             statistic_label = c("LBW Percent"),
+                                             diversity_variable = "CommunityGroup")
+ggplotly(chicago_map_birth_rate, tooltip = c("text"))  
+```
+ 
+From hovering over the neighborhoods in this heatmap, we confirm that most of the highest proportions of low birth weights are indeed in the more and most diverse neighborhoods. 
+
+#### Low Birthweight: Statistical Analysis
+```{r, warning = FALSE, message = FALSE}
+source("source_code/stat_analysis/StatAnalysisLBW.R")
+tukey_results_lbw = format_kable(AnovaTukeySigDiffs(lbw.percent.long))
+kable(tukey_results_lbw, escape = FALSE) %>%
+  kable_styling()
+```
+
+One-way ANOVA testing showed that there were statistically significant differences in the proportion of low birthweight births between one or more community group in each year from 2000-2009.
+
+**Low Birthweights, Table 1:** P-Value Results of ANOVA statistical testing for the proportion of low birthweights, by year.
+
+| **Year** | **P-Value** |
+| :------- | :---------- |
+| 2000     | < 0.001     |
+| 2001     | < 0.001     |
+| 2002     | < 0.001     |
+| 2003     | < 0.001     |
+| 2004     | < 0.001     |
+| 2005     | < 0.001     |
+| 2006     | < 0.001     |
+| 2007     | < 0.001     |
+| 2008     | < 0.001     |
+| 2009     | < 0.001     |
+
+Further testing with the Tukey-Kramer HSD Post-Hoc test yielded the following results:
+
+**Low Birthweights, Table 2:** Results of Tukey-Kramer HSD statistical testing for the proportion of low birthweights, by year.
+
+| **Year** | **Statistically Significant Differences** |
+| :------- | :---------------------------------------- |
+| 2000     | Least - Moderately/More/Most              |
+|          | Less - Moderately/More/Most               |
+|          | Moderately - Most                         |
+| 2001     | Least - Moderately/More/Most              |
+|          | Less - Moderately/More/Most               |
+|          | Moderately - Most                         |
+| 2002     | Least - Moderately/More/Most              |
+|          | Less - Moderately/More/Most               |
+| 2003     | Least - Moderately/More/Most              |
+|          | Less - Moderately/More/Most               |
+|          | Moderately - Most                         |
+| 2004     | Least - Moderately/More/Most              |
+|          | Less - More/Most                          |
+| 2005     | Least - Moderately/More/Most              |
+|          | Less - Moderately/More/Most               |
+|          | Moderately - More/Most                    |
+| 2006     | Least - Moderately/More/Most              |
+|          | Less - More/Most                          |
+|          | Moderately - Most                         |
+| 2007     | Least - Moderately/More/Most              |
+|          | Less - More/Most                          |
+|          | Moderately - Most                         |
+| 2008     | Least - Moderately/More/Most              |
+|          | Less - More/Most                          |
+| 2009     | Least - Moderately/More/Most              |
+|          | Less - Moderately/More/Most               |
+|          | Moderately - Most                         |
+
+Overall, there seemed to be trends across all years with statistically significant differences between the Most Diverse and Least/Less Diverse community groups. This follows trends from the rest of our data exploration showing that there is a racial component to maternal/infant health outcomes.
+
+# Discussion
+## Overall Conclusions
+
+Based on our analysis of available women’s health statistics in Chicago, we conclude that women that lived in more diverse communities from 2000-2009 had lower access to care and worse health outcomes compared to women that lived in less diverse communities. For example, women in more diverse communities had higher rates of chlamydia, higher rates of teen pregnancy, and higher rates of infant mortality than women in less diverse communities; also, women in more diverse communities had lower rates of initiating prenatal care in the first trimester compared to women in less diverse communities. Higher rates of health statistics like chlamydia, infant mortality, and teen pregnancy, and lower rates of prenatal care in the first trimester, are indicators of worse health outcomes and of lower quality care. Our analysis also shows that non-health factors, like race/ethnicity, contribute to health disparities.
+
+## Limitations
+
+We encountered a few data limitations in our project. First, we only used race/ethnicity data from the 2000 census, but our analysis evaluated women's health statistics from 2000 to 2009, so we did not account for changes in the racial distribution of the city through the decade. Second, we did not have access to some important women's health statistics. We would have gained a better understanding of the differences in access to care and quality of care among women in Chicago, and our analysis would have been more robust, if we had access to other women's health statistics like contraceptive use, maternal mortality rates, birth complication rates, c-section rates, etc. Third, for some of the data sets, there were low counts and missing data, which may have slightly skewed results. 
+
+## Next Steps
+
+If we had more time, there are three additions we would have liked to include in our project. First, evaluate the interaction between the data sets. We analyzed each data set in a silo-ed manner, so next steps would be to take a more holistic view of all of the data sets. For example, evaluate if the neighborhoods with low prenatal care in the first trimester are the same neighborhoods wither higher infant mortality rates, or with higher rates of preterm births. Second, identify neighborhoods that would benefit from public health interventions. It would be interesting to research the public health resources that are available to women in each community group, and then use our analysis and results to identify neighborhoods where public health resources should be directed. Third, evaluate women's health statistics by other factors besides race/ethnicity. If we had more time and access to more data, we would have liked to analyze the women's health statistics by other factors such as age, income, education level, etc. 
+
+# References
+[1] M. Z. Gunja, R. Tikkanen, S. Seervai, and S. R. Collins, What is the status of Women’s Health and health care in the U.S. compared to ten other countries?, https://www.commonwealthfund.org/publications/issuebriefs/2018/dec/womens-health-us-compared-ten-other-countries. <a id="ref1"></a>
+
+[2] A. for Healthcare Research and Quality, Achieving health equity in Preventive Services: Systematic Evidence Review. Effective Health Care (EHC) Program, https://effectivehealthcare.ahrq.gov/products/health-equitypreventive/protocol. <a id="ref2"></a>
+
+[3] C. for Disease Control and Prevention, Severe maternal morbidity in the United States. Reproductive Health, https://www.cdc.gov/reproductivehealth/maternalinfanthealth/severematernalmorbidity.htm. <a id="ref3"></a>
+
+[4] Chicago Public Health Statistics. (2019). Kaggle; 10/5/2022. https://www.kaggle.com/datasets/chicago/chicago-public-health-statistics. <a id="ref4"></a>
+
+[5] Community Data Snapshots. Chicago Metropolitan Agency for Planning (CMAP). (n.d.). Retrieved November 11, 2022, from https://www.cmap.illinois.gov/data/community-snapshots. <a id="ref5"></a>
+
+[6] Welgus D (2022). MapChi: Tools for making maps of Chicago. R package version 0.1.0. https://github.com/dmwelgus/MapChi.  <a id="ref6"></a>
+
+[7] Nathan, R. P., & Adams, C. (1976). Understanding Central City Hardship. Political Science Quarterly, 91(1), 47–62. https://doi.org/10.2307/2149158. <a id="ref7"></a>
