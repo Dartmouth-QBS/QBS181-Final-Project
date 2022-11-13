@@ -2,6 +2,9 @@
 
 ## QBS 181 Final Project, Fall 2022
 
+**To access final report:** [https://rstudio-connect-dev.dartmouth.edu/content/dde20d72-c179-40f4-b008-8a7db9c7f0f1/Final_Writeup.html](https://rstudio-connect-dev.dartmouth.edu/content/dde20d72-c179-40f4-b008-8a7db9c7f0f1/Final_Writeup.html)
+
+
 -   **data/**: directory containing all datasets used in project
 
     -   **health_stats/**: contains all public health data, as collected from [Kaggle](https://www.kaggle.com/datasets/chicago/chicago-public-health-statistics)
